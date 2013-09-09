@@ -40,6 +40,38 @@ public class RandomSequence implements ArrayGenerator
             }
         }
 
+        //Attach any disconnected elements
+        int count = 0;
+        while(count != elements)
+        {
+            char[] visited = new char[elements];
+            int lastidx = 0;
+            int idx = 0;
+            count = 0;
+            while(idx != -1 && visited[idx] == 0)
+            {
+                count++;
+                visited[idx] = 1;
+                lastidx = idx;
+                idx = retn[idx];
+            }
+
+            //Unroll cycles
+            if(count != elements)
+            {
+                //Find first unvisited
+                int visitedIdx = 0;
+                while(visited[++visitedIdx] != 0);
+
+                int nextIdx = retn[visitedIdx];
+                retn[lastidx] = nextIdx;
+                retn[visitedIdx] = -1;
+
+            }
+            else
+                retn[lastidx] = -1;
+        }
+
         return retn;
     }
 

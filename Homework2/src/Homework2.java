@@ -35,7 +35,7 @@ public class Homework2
     {
         final int average = 5;
 
-        for(int i = 5; i <= 26; i++)
+        for(int i = 5; i <= 25; i++)
         {
             long totalDiff = 0;
             for(int j = 0; j < average; j++)
@@ -74,13 +74,13 @@ public class Homework2
 
         try
         {
-            hw.runSequence(new SequentialArray());
+            //hw.runSequence(new SequentialArray());
             hw.runSequence(new RandomSequence());
             hw.runSequence(new NStride(2));
             hw.runSequence(new NStride(4));
         }catch(Exception e)
         {
-            System.out.println(e);
+            e.printStackTrace();
         }
     }
 }
