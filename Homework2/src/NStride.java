@@ -22,9 +22,11 @@ public class NStride implements ArrayGenerator
 
         for(int i = 0 ; i < elements; i++)
         {
-            int val = (i + stride) % elements;
-            retn[i] = val == 0 ? -1 : val;
+            int val = (i + stride - 1) % (elements - 1) + 1;
+            retn[i] = val;
         }
+
+        retn[elements - 1] = -1;
 
         return retn;
     }
