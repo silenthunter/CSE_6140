@@ -20,6 +20,8 @@ __device__ void sortEdges(int* edges, int* sorted)
 		retnVal = atomicCAS(arrStart, 0, n2);
 }
 
+
+//HACK: This will be incredibly slow  on CUDA!
 __device__ int findNext(int* edges, int numEdge, int v, int* destination)
 {
 	int count = 0;
@@ -33,16 +35,56 @@ __device__ int findNext(int* edges, int numEdge, int v, int* destination)
 	return count;
 }
 
+__device__ void pushQueue(int element, int* queue, int queueSize, int* head, int* tail)
+{
+	*tail = (*tail + 1) % queueSize;
+	queue[tail] = element;
+}
+
+__device__ int popQueue(int* queue, int queueSize, int* head, int* tail)
+{
+	int retn = queue[*head];
+	*head = (*head + 1) % queueSize;
+	
+	return retn;
+}
+
+__device__ void pushStack(int element, int* stack, int* head)
+{
+	*head = *head + 1;
+	stack[tail] = element;
+}
+
+__device__ int popStack(int* stack, int* head)
+{
+	int retn = stack[*head];
+	*head = *head - 1;
+	
+	return retn;
+}
+
 
 __device__ void doAlg(int numVert)
 {
 	int x = blockDim.x * blockIdx.x + threadIdx.x;	
 	int y = blockDim.y * blockIdx.x + threadIdx.y;	
 	int idx = x + y * blockDim.x * gridDim.x;
-
-	int arr[32];
-
-	int startVert = idx;
+	
+	int S[];
+	int S_head = 0;
+	
+	int P[];
+	pathCount[]; pathCount[idx] = 1;
+	int d[]; d[idx] = 0;
+	
+	int Q_size;
+	int Q[Q_size];
+	int Q_head = 0;
+	int Q_tail = 0;
+	
+	pushQueue(idx, Q, Q_size, &Q_head, &q_tail);
+	
+	
 }
 
 __global__ void betweennessCentrality(int numVert, int numEdges, int *edges, int* BC)
