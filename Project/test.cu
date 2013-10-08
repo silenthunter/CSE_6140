@@ -1,21 +1,10 @@
 #include <cuda.h>
 #include <stdio.h>
 #include <iostream>
-#include <thrust/device_vector.h>
 
 using namespace std;
 
 __device__ const int MAX_DEGREE = 4;
-
-__global__ void test(int* d_mem)
-{
-	int x = blockIdx.x * blockDim.x + threadIdx.x;
-	int y = blockIdx.y * blockDim.y + threadIdx.y;
-	int elementPitch = blockDim.x * gridDim.x;
-	int i = y * elementPitch + x;
-	for(int j = 0; j < 1024; j++)
-		d_mem[i] = warpSize;
-}
 
 __device__ void sortEdges(int* edges, int* sorted)
 {
@@ -27,17 +16,51 @@ __device__ void sortEdges(int* edges, int* sorted)
 	
 	int* arrStart = &sorted[n1 * MAX_DEGREE];
 	int retnVal = 1;
-	//while(retnVal != 0)
+	while(retnVal != 0)
 		retnVal = atomicCAS(arrStart, 0, n2);
+}
+
+__device__ int findNext(int* edges, int numEdge, int v, int* destination)
+{
+	int count = 0;
+
+	for(int i = 0; i < numEdge * 2; i+=2)
+	{
+		if(edges[i] == v)
+			destination[count++] = edges[i + 1];
+	}
+
+	return count;
+}
+
+
+__device__ void doAlg(int numVert)
+{
+	int x = blockDim.x * blockIdx.x + threadIdx.x;	
+	int y = blockDim.y * blockIdx.x + threadIdx.y;	
+	int idx = x + y * blockDim.x * gridDim.x;
+
+	int arr[32];
+
+	int startVert = idx;
 }
 
 __global__ void betweennessCentrality(int numVert, int numEdges, int *edges, int* BC)
 {
 	extern __shared__ int path[];
 	
-	sortEdges(edges, path);
-	//int y = blockDim.x * threadIdx.y;
-	//int x = threadIdx.x;
+	//sortEdges(edges, path);
+	int x = blockDim.x * blockIdx.x + threadIdx.x;	
+	int y = blockDim.y * blockIdx.x + threadIdx.y;	
+	int idx = x + y * blockDim.x * gridDim.x;
+
+	int arr[8];
+	int count = findNext(edges, numEdges, idx, arr);
+	if(count > 0)
+		BC[idx] = arr[0];
+	else
+		BC[idx] = -1;
+		
 }
 
 int main()
@@ -48,11 +71,16 @@ int main()
 	int *d_mem;
 	int *h_edge;
 	int *d_edge;
+	int *d_bc;
+	int *h_bc;
 	
 	cudaMalloc((void**)&d_mem, sizeof(int) * elements);
 	
 	h_edge = (int*)malloc(sizeof(int) * elements * 2);
 	cudaMalloc((void**)&d_edge, sizeof(int) * elements * 2);
+
+	h_bc = (int*)malloc(sizeof(int) * elements);
+	cudaMalloc((void**)&d_bc, sizeof(int) * elements);
 	
 	//Init edges
 	for(int i = 0; i < elements; i++)
@@ -65,14 +93,20 @@ int main()
 	dim3 block(32,32);
 	dim3 grid(elements / 1024);
 	//test<<<grid,block>>>(d_mem);
-	betweennessCentrality<<<grid,block, sizeof(int) * elements * MAX_DEGREE>>>(elements, elements, d_edge, 0x0);
+	betweennessCentrality<<<grid,block, sizeof(int) * elements * MAX_DEGREE>>>(elements, elements, d_edge, d_bc);
 	cudaError_t error = cudaGetLastError();
 	cout << cudaGetErrorString(error) << endl;
 	
 	int* h_mem = (int*)malloc(sizeof(int) * elements);
 	cudaMemcpy(h_mem, d_mem, sizeof(int) * elements, cudaMemcpyDeviceToHost);
+	cudaMemcpy(h_bc, d_bc, sizeof(int) * elements, cudaMemcpyDeviceToHost);
 	
-	cout<<elements<<endl;
+
+	for(int i = 0; i < elements; i++)
+	{
+		cout << h_bc[i] << endl;
+	}
+	//cout<<elements<<endl;
 	
 	//cudaProfilerStop();
 	
