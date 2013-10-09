@@ -38,7 +38,7 @@ __device__ int findNext(int* edges, int numEdge, int v, int* destination)
 __device__ void pushQueue(int element, int* queue, int queueSize, int* head, int* tail)
 {
 	*tail = (*tail + 1) % queueSize;
-	queue[tail] = element;
+	queue[*tail] = element;
 }
 
 __device__ int popQueue(int* queue, int queueSize, int* head, int* tail)
@@ -52,7 +52,7 @@ __device__ int popQueue(int* queue, int queueSize, int* head, int* tail)
 __device__ void pushStack(int element, int* stack, int* head)
 {
 	*head = *head + 1;
-	stack[tail] = element;
+	stack[*head] = element;
 }
 
 __device__ int popStack(int* stack, int* head)
@@ -63,27 +63,47 @@ __device__ int popStack(int* stack, int* head)
 	return retn;
 }
 
+const int S_SIZE = 5;
+const int P_SIZE = 5;
+const int PATH_SIZE = 5;
+const int D_SIZE = 5;
+const int Q_SIZE = 5;
 
-__device__ void doAlg(int numVert)
+
+__device__ void doAlg(int numVert, int* edges, int numEdges)
 {
 	int x = blockDim.x * blockIdx.x + threadIdx.x;	
 	int y = blockDim.y * blockIdx.x + threadIdx.y;	
 	int idx = x + y * blockDim.x * gridDim.x;
 	
-	int S[];
+	int S[S_SIZE];
 	int S_head = 0;
 	
-	int P[];
-	pathCount[]; pathCount[idx] = 1;
-	int d[]; d[idx] = 0;
+	int P[P_SIZE];
+
+	int pathCount[PATH_SIZE]; pathCount[idx] = 1;
+
+	int d[D_SIZE]; d[idx] = 0;
 	
-	int Q_size;
-	int Q[Q_size];
+	int Q[Q_SIZE];
 	int Q_head = 0;
 	int Q_tail = 0;
 	
-	pushQueue(idx, Q, Q_size, &Q_head, &q_tail);
-	
+	pushQueue(idx, Q, Q_SIZE, &Q_head, &Q_tail);
+
+	while(Q_head != Q_tail)
+	{
+		int v = popQueue(Q, Q_SIZE, &Q_head, &Q_tail);
+		pushStack(v, S, S_SIZE, &S_head);
+
+		int w[8];
+		int edgeCount = findNext(edges, numEdges, v, w);
+
+		for(int i = 0; i < edgeCount; i++)
+		{
+		}
+
+	}
 	
 }
 
