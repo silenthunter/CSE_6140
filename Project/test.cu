@@ -65,12 +65,13 @@ __device__ int popStack(int* stack, int* head)
 
 const int S_SIZE = 5;
 const int P_SIZE = 5;
+const int P_LIST_SIZE = 5;
 const int PATH_SIZE = 5;
 const int D_SIZE = 5;
 const int Q_SIZE = 5;
 
 
-__device__ void doAlg(int numVert, int* edges, int numEdges)
+__device__ void doAlg(int numVert, int* edges, int numEdges, int* BC)
 {
 	int x = blockDim.x * blockIdx.x + threadIdx.x;	
 	int y = blockDim.y * blockIdx.x + threadIdx.y;	
@@ -79,7 +80,7 @@ __device__ void doAlg(int numVert, int* edges, int numEdges)
 	int S[S_SIZE];
 	int S_head = 0;
 	
-	int P[P_SIZE];
+	int* P[P_SIZE];
 
 	int pathCount[PATH_SIZE]; pathCount[idx] = 1;
 
@@ -101,8 +102,37 @@ __device__ void doAlg(int numVert, int* edges, int numEdges)
 
 		for(int i = 0; i < edgeCount; i++)
 		{
+			int wNode = w[i];
+			if(d[wNode] < 0)
+			{
+				pushQueue(wNode, Q, Q_SIZE, &Q_head, &Q_tail);
+				d[wNode] = d[v] + 1;
+			}
+			
+			if(d[dNode] == d[v] + 1)
+			{
+				pathCount[wNode] = pathCount[wNode] + pathCount[v];
+				
+				//HACK: Use actual list here
+				pushStack(v, P[wNode], P_LIST_SIZE, 0);
+			}
 		}
 
+	}
+	
+	float dep[1];
+	
+	while(S_head >= 0)
+	{
+		int w = popStack(S, S_SIZE, &S_head);
+		
+		//TODO: Loop through each v in P[w]
+		
+		if(w != idx)
+		{
+			//TODO: Atomic
+			BC[w] = BC[w] + dep[w];
+		}
 	}
 	
 }
