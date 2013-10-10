@@ -80,7 +80,13 @@ __device__ void doAlg(int numVert, int* edges, int numEdges, int* BC)
 	int S[S_SIZE];
 	int S_head = 0;
 	
-	int* P[P_SIZE];
+	int P[P_SIZE][MAX_DEGREE];
+	//Blank the previous items
+	for(int i = 0; i < P_SIZE; i++)
+		for(int j = 0; j < MAX_DEGREE; j++)
+		{
+			P[i][j] = -1;
+		}
 
 	int pathCount[PATH_SIZE]; pathCount[idx] = 1;
 
@@ -95,7 +101,7 @@ __device__ void doAlg(int numVert, int* edges, int numEdges, int* BC)
 	while(Q_head != Q_tail)
 	{
 		int v = popQueue(Q, Q_SIZE, &Q_head, &Q_tail);
-		pushStack(v, S, S_SIZE, &S_head);
+		pushStack(v, S, &S_head);
 
 		int w[8];
 		int edgeCount = findNext(edges, numEdges, v, w);
@@ -109,12 +115,19 @@ __device__ void doAlg(int numVert, int* edges, int numEdges, int* BC)
 				d[wNode] = d[v] + 1;
 			}
 			
-			if(d[dNode] == d[v] + 1)
+			if(d[wNode] == d[v] + 1)
 			{
 				pathCount[wNode] = pathCount[wNode] + pathCount[v];
 				
-				//HACK: Use actual list here
-				pushStack(v, P[wNode], P_LIST_SIZE, 0);
+				//Append v to the PrevNode list
+				for(int j = 0; j < MAX_DEGREE; j++)
+				{
+					if(P[wNode][j] < 0)
+					{
+						P[wNode][j] = v;
+						break;
+					}
+				}
 			}
 		}
 
@@ -124,9 +137,14 @@ __device__ void doAlg(int numVert, int* edges, int numEdges, int* BC)
 	
 	while(S_head >= 0)
 	{
-		int w = popStack(S, S_SIZE, &S_head);
+		int w = popStack(S, &S_head);
 		
-		//TODO: Loop through each v in P[w]
+		//Loop through each v in P[w]
+		for(int i = 0; i < MAX_DEGREE; i++)
+		{
+			int v = P[w][i];
+			dep[v] = dep[v] + (pathCount[v]/pathCount[w]) * (1 + dep[w]);
+		}
 		
 		if(w != idx)
 		{
@@ -147,11 +165,13 @@ __global__ void betweennessCentrality(int numVert, int numEdges, int *edges, int
 	int idx = x + y * blockDim.x * gridDim.x;
 
 	int arr[8];
-	int count = findNext(edges, numEdges, idx, arr);
+	/*int count = findNext(edges, numEdges, idx, arr);
 	if(count > 0)
 		BC[idx] = arr[0];
 	else
-		BC[idx] = -1;
+		BC[idx] = -1;*/
+	doAlg(numVert, edges, numEdges, BC);
+
 		
 }
 
@@ -196,7 +216,7 @@ int main()
 
 	for(int i = 0; i < elements; i++)
 	{
-		cout << h_bc[i] << endl;
+		//cout << h_bc[i] << endl;
 	}
 	//cout<<elements<<endl;
 	
