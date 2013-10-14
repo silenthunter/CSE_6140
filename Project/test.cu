@@ -37,8 +37,8 @@ __device__ int findNext(int* edges, int numEdge, int v, int* destination)
 
 __device__ void pushQueue(int element, int* queue, int queueSize, int* head, int* tail)
 {
-	*tail = (*tail + 1) % queueSize;
 	queue[*tail] = element;
+	*tail = (*tail + 1) % queueSize;
 }
 
 __device__ int popQueue(int* queue, int queueSize, int* head, int* tail)
@@ -51,50 +51,64 @@ __device__ int popQueue(int* queue, int queueSize, int* head, int* tail)
 
 __device__ void pushStack(int element, int* stack, int* head)
 {
-	*head = *head + 1;
 	stack[*head] = element;
+	*head = *head + 1;
 }
 
 __device__ int popStack(int* stack, int* head)
 {
-	int retn = stack[*head];
 	*head = *head - 1;
+	int retn = stack[*head];
 	
 	return retn;
 }
 
-const int S_SIZE = 5;
-const int P_SIZE = 5;
-const int P_LIST_SIZE = 5;
-const int PATH_SIZE = 5;
-const int D_SIZE = 5;
-const int Q_SIZE = 5;
+const int ELEMENTS = 64;
+const int S_SIZE = ELEMENTS;
+const int P_SIZE = ELEMENTS;
+const int P_LIST_SIZE = ELEMENTS;
+const int PATH_SIZE = ELEMENTS;
+const int D_SIZE = ELEMENTS;
+const int Q_SIZE = ELEMENTS;
 
 
-__device__ void doAlg(int numVert, int* edges, int numEdges, int* BC)
+__device__ void doAlg(int numVert, int* edges, int numEdges, int* BC, int* glob)
 {
 	int x = blockDim.x * blockIdx.x + threadIdx.x;	
 	int y = blockDim.y * blockIdx.x + threadIdx.y;	
 	int idx = x + y * blockDim.x * gridDim.x;
+
+	int PTR_OFFSET = idx * (S_SIZE + (P_SIZE * MAX_DEGREE) + D_SIZE + Q_SIZE + PATH_SIZE);
 	
-	int S[S_SIZE];
+	int* S = &glob[PTR_OFFSET];
 	int S_head = 0;
+	PTR_OFFSET += S_SIZE;
 	
-	int P[P_SIZE][MAX_DEGREE];
+	int* P = &glob[PTR_OFFSET];
 	//Blank the previous items
 	for(int i = 0; i < P_SIZE; i++)
 		for(int j = 0; j < MAX_DEGREE; j++)
 		{
-			P[i][j] = -1;
+			P[i * P_SIZE + j] = -1;
 		}
+	PTR_OFFSET += P_SIZE * MAX_DEGREE;
 
-	int pathCount[PATH_SIZE]; pathCount[idx] = 1;
+	int* pathCount = &glob[PTR_OFFSET];
+	pathCount[idx] = 1;
+	PTR_OFFSET += PATH_SIZE;
 
-	int d[D_SIZE]; d[idx] = 0;
+	int* d = &glob[PTR_OFFSET];
+	for(int i = 0; i < D_SIZE; i++)
+	{
+		d[i] = -1;
+	}
+	d[idx] = 0;
+	PTR_OFFSET += D_SIZE;
 	
-	int Q[Q_SIZE];
+	int* Q = &glob[PTR_OFFSET];
 	int Q_head = 0;
 	int Q_tail = 0;
+	PTR_OFFSET += Q_SIZE;
 	
 	pushQueue(idx, Q, Q_SIZE, &Q_head, &Q_tail);
 
@@ -122,9 +136,9 @@ __device__ void doAlg(int numVert, int* edges, int numEdges, int* BC)
 				//Append v to the PrevNode list
 				for(int j = 0; j < MAX_DEGREE; j++)
 				{
-					if(P[wNode][j] < 0)
+					if(P[wNode * P_SIZE + j] < 0)
 					{
-						P[wNode][j] = v;
+						P[wNode * P_SIZE + j] = v;
 						break;
 					}
 				}
@@ -133,29 +147,29 @@ __device__ void doAlg(int numVert, int* edges, int numEdges, int* BC)
 
 	}
 	
-	float dep[1];
+	float* dep = (float*)&glob[PTR_OFFSET];
 	
-	while(S_head >= 0)
+	while(S_head > 0)
 	{
 		int w = popStack(S, &S_head);
 		
 		//Loop through each v in P[w]
 		for(int i = 0; i < MAX_DEGREE; i++)
 		{
-			int v = P[w][i];
-			dep[v] = dep[v] + (pathCount[v]/pathCount[w]) * (1 + dep[w]);
+			int v = P[0];//P[w * P_SIZE + i];
+			//dep[v] = dep[v] + (pathCount[v]/pathCount[w]) * (1 + dep[w]);
 		}
 		
 		if(w != idx)
 		{
 			//TODO: Atomic
-			BC[w] = BC[w] + dep[w];
+			BC[w] = 1;//BC[w] + dep[w];
 		}
 	}
 	
 }
 
-__global__ void betweennessCentrality(int numVert, int numEdges, int *edges, int* BC)
+__global__ void betweennessCentrality(int numVert, int numEdges, int *edges, int* BC, int* glob)
 {
 	extern __shared__ int path[];
 	
@@ -164,20 +178,14 @@ __global__ void betweennessCentrality(int numVert, int numEdges, int *edges, int
 	int y = blockDim.y * blockIdx.x + threadIdx.y;	
 	int idx = x + y * blockDim.x * gridDim.x;
 
-	int arr[8];
-	/*int count = findNext(edges, numEdges, idx, arr);
-	if(count > 0)
-		BC[idx] = arr[0];
-	else
-		BC[idx] = -1;*/
-	doAlg(numVert, edges, numEdges, BC);
+	doAlg(numVert, edges, numEdges, BC, glob);
 
 		
 }
 
 int main()
 {
-	const int elements = 1024;
+	const int elements = 64;
 
 	//cudaProfilerStart();
 	int *d_mem;
@@ -185,6 +193,7 @@ int main()
 	int *d_edge;
 	int *d_bc;
 	int *h_bc;
+	int *d_glob;
 	
 	cudaMalloc((void**)&d_mem, sizeof(int) * elements);
 	
@@ -193,6 +202,8 @@ int main()
 
 	h_bc = (int*)malloc(sizeof(int) * elements);
 	cudaMalloc((void**)&d_bc, sizeof(int) * elements);
+
+	cudaMalloc((void**)&d_glob, sizeof(int) * elements * elements * 20);
 	
 	//Init edges
 	for(int i = 0; i < elements; i++)
@@ -202,12 +213,11 @@ int main()
 	}
 	cudaMemcpy(d_edge, h_edge, sizeof(int) * elements * 2, cudaMemcpyHostToDevice);
 	
-	dim3 block(32,32);
-	dim3 grid(elements / 1024);
+	dim3 block(8,8);
+	dim3 grid(elements / 64);
 	//test<<<grid,block>>>(d_mem);
-	betweennessCentrality<<<grid,block, sizeof(int) * elements * MAX_DEGREE>>>(elements, elements, d_edge, d_bc);
+	betweennessCentrality<<<grid,block>>>(elements, elements, d_edge, d_bc, d_glob);
 	cudaError_t error = cudaGetLastError();
-	cout << cudaGetErrorString(error) << endl;
 	
 	int* h_mem = (int*)malloc(sizeof(int) * elements);
 	cudaMemcpy(h_mem, d_mem, sizeof(int) * elements, cudaMemcpyDeviceToHost);
@@ -216,13 +226,14 @@ int main()
 
 	for(int i = 0; i < elements; i++)
 	{
-		//cout << h_bc[i] << endl;
+		cout << h_bc[i] << endl;
 	}
 	//cout<<elements<<endl;
 	
 	//cudaProfilerStop();
 	
 	cudaDeviceReset();
+	cout << cudaGetErrorString(error) << endl;
 	
 	return 0;
 }
