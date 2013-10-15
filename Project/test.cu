@@ -88,7 +88,7 @@ __device__ void doAlg(int numVert, int* edges, int numEdges, float* BC, int* glo
 	for(int i = 0; i < P_SIZE; i++)
 		for(int j = 0; j < MAX_DEGREE; j++)
 		{
-			P[i * P_SIZE + j] = -1;
+			P[i + P_SIZE * j] = -1;
 		}
 	PTR_OFFSET += P_SIZE * MAX_DEGREE;
 
@@ -120,7 +120,7 @@ __device__ void doAlg(int numVert, int* edges, int numEdges, float* BC, int* glo
 		int v = popQueue(Q, Q_SIZE, &Q_head, &Q_tail);
 		pushStack(v, S, &S_head);
 
-		int w[8];
+		int w[MAX_DEGREE];
 		int edgeCount = findNext(edges, numEdges, v, w);
 
 		for(int i = 0; i < edgeCount; i++)
@@ -139,9 +139,9 @@ __device__ void doAlg(int numVert, int* edges, int numEdges, float* BC, int* glo
 				//Append v to the PrevNode list
 				for(int j = 0; j < MAX_DEGREE; j++)
 				{
-					if(P[wNode * P_SIZE + j] < 0)
+					if(P[wNode + P_SIZE * j] < 0)
 					{
-						P[wNode * P_SIZE + j] = v;
+						P[wNode + P_SIZE * j] = v;
 						break;
 					}
 				}
@@ -159,16 +159,16 @@ __device__ void doAlg(int numVert, int* edges, int numEdges, float* BC, int* glo
 		//Loop through each v in P[w]
 		for(int i = 0; i < MAX_DEGREE; i++)
 		{
-			int v = P[w * P_SIZE + i];
+			int v = P[w + P_SIZE * i];
 			if(v < 0) continue;
 
-			dep[v] = dep[v] + (pathCount[v]/pathCount[w]) * (1 + dep[w]);
+			dep[v] = dep[v] + ((float)pathCount[v]/(float)pathCount[w]) * (1 + dep[w]);
 		}
 		
 		if(w != idx)
 		{
-			//TODO: Atomic
-			BC[w] = dep[w];//BC[w] + dep[w];
+			atomicAdd(&BC[w], dep[w]);
+			//BC[w] = BC[w] + dep[w];
 		}
 	}
 	
@@ -182,6 +182,8 @@ __global__ void betweennessCentrality(int numVert, int numEdges, int *edges, flo
 	int x = blockDim.x * blockIdx.x + threadIdx.x;	
 	int y = blockDim.y * blockIdx.x + threadIdx.y;	
 	int idx = x + y * blockDim.x * gridDim.x;
+
+	BC[idx] = 0.0f;
 
 	doAlg(numVert, edges, numEdges, BC, glob, dep);
 
@@ -213,7 +215,7 @@ int main()
 	cudaMalloc((void**)&d_dep, sizeof(float) * elements * elements);
 	
 	//Init edges
-	for(int i = 0; i < elements; i++)
+	for(int i = 0; i < elements - 1; i++)
 	{
 		h_edge[i * 2] = i % elements;
 		h_edge[i * 2 + 1] = (i + 1) % elements;
@@ -223,7 +225,7 @@ int main()
 	dim3 block(8,8);
 	dim3 grid(elements / 64);
 	//test<<<grid,block>>>(d_mem);
-	betweennessCentrality<<<grid,block>>>(elements, elements, d_edge, d_bc, d_glob, d_dep);
+	betweennessCentrality<<<grid,block>>>(elements, elements - 1, d_edge, d_bc, d_glob, d_dep);
 	cudaError_t error = cudaGetLastError();
 	
 	int* h_mem = (int*)malloc(sizeof(int) * elements);
