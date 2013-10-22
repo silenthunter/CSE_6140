@@ -63,7 +63,7 @@ __device__ int popStack(int* stack, int* head)
 	return retn;
 }
 
-const int ELEMENTS = 64;
+const int ELEMENTS = 16;
 const int S_SIZE = ELEMENTS;
 const int P_SIZE = ELEMENTS;
 const int PATH_SIZE = ELEMENTS;
@@ -71,10 +71,10 @@ const int D_SIZE = ELEMENTS;
 const int Q_SIZE = ELEMENTS;
 
 
-__device__ void doAlg(int numVert, int* edges, int numEdges, float* BC, int* glob, float* dep)
+__device__ void doAlg(int numVert, int* edges, int numEdges, float* BC, int* glob, float* globDep)
 {
 	int x = blockDim.x * blockIdx.x + threadIdx.x;	
-	int y = blockDim.y * blockIdx.x + threadIdx.y;	
+	int y = blockDim.y * blockIdx.y + threadIdx.y;	
 	int idx = x + y * blockDim.x * gridDim.x;
 
 	int PTR_OFFSET = idx * (S_SIZE + (P_SIZE * MAX_DEGREE) + D_SIZE + Q_SIZE + PATH_SIZE) * 3;
@@ -150,7 +150,7 @@ __device__ void doAlg(int numVert, int* edges, int numEdges, float* BC, int* glo
 
 	}
 	
-	//int* dep = (int*)&glob[PTR_OFFSET];
+	float* dep = &globDep[idx * ELEMENTS];
 	
 	while(S_head > 0)
 	{
@@ -185,6 +185,8 @@ __global__ void betweennessCentrality(int numVert, int numEdges, int *edges, flo
 
 	BC[idx] = 0.0f;
 
+	__syncthreads();
+
 	doAlg(numVert, edges, numEdges, BC, glob, dep);
 
 		
@@ -192,7 +194,7 @@ __global__ void betweennessCentrality(int numVert, int numEdges, int *edges, flo
 
 int main()
 {
-	const int elements = 64;
+	const int elements = ELEMENTS;
 
 	//cudaProfilerStart();
 	int *d_mem;
@@ -223,7 +225,7 @@ int main()
 	cudaMemcpy(d_edge, h_edge, sizeof(int) * elements * 2, cudaMemcpyHostToDevice);
 	
 	dim3 block(8,8);
-	dim3 grid(elements / 64);
+	dim3 grid(elements / 16);
 	//test<<<grid,block>>>(d_mem);
 	betweennessCentrality<<<grid,block>>>(elements, elements - 1, d_edge, d_bc, d_glob, d_dep);
 	cudaError_t error = cudaGetLastError();
