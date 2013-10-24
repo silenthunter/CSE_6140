@@ -6,6 +6,9 @@ using namespace std;
 
 __device__ const int MAX_DEGREE = 4;
 
+const int BLOCK_WIDTH = 8;
+const int BLOCK_HEIGHT = 8;
+
 __device__ void sortEdges(int* edges, int* sorted)
 {
 	int x = blockDim.x * blockIdx.x + threadIdx.x;
@@ -63,7 +66,7 @@ __device__ int popStack(int* stack, int* head)
 	return retn;
 }
 
-const int ELEMENTS = 16;
+const int ELEMENTS = 512;
 const int S_SIZE = ELEMENTS;
 const int P_SIZE = ELEMENTS;
 const int PATH_SIZE = ELEMENTS;
@@ -168,7 +171,6 @@ __device__ void doAlg(int numVert, int* edges, int numEdges, float* BC, int* glo
 		if(w != idx)
 		{
 			atomicAdd(&BC[w], dep[w]);
-			//BC[w] = BC[w] + dep[w];
 		}
 	}
 	
@@ -224,8 +226,8 @@ int main()
 	}
 	cudaMemcpy(d_edge, h_edge, sizeof(int) * elements * 2, cudaMemcpyHostToDevice);
 	
-	dim3 block(8,8);
-	dim3 grid(elements / 16);
+	dim3 block(BLOCK_WIDTH, BLOCK_HEIGHT);
+	dim3 grid(elements / (BLOCK_WIDTH * BLOCK_HEIGHT));
 	//test<<<grid,block>>>(d_mem);
 	betweennessCentrality<<<grid,block>>>(elements, elements - 1, d_edge, d_bc, d_glob, d_dep);
 	cudaError_t error = cudaGetLastError();
