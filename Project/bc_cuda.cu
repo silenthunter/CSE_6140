@@ -189,7 +189,7 @@ __global__ void betweennessCentrality(int numVert, int numEdges, int *edges, flo
 	
 	//sortEdges(edges, path);
 	int x = blockDim.x * blockIdx.x + threadIdx.x;	
-	int y = blockDim.y * blockIdx.x + threadIdx.y;	
+	int y = blockDim.y * blockIdx.y + threadIdx.y;	
 	int idx = x + y * blockDim.x * gridDim.x;
 
 	if(idx >= numVert) return;
