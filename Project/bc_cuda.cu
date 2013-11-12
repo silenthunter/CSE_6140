@@ -4,7 +4,7 @@
 
 using namespace std;
 
-__device__ const int MAX_DEGREE = 4;
+__device__ const int MAX_DEGREE = 50;
 
 const int BLOCK_WIDTH = 2;
 const int BLOCK_HEIGHT = 2;
@@ -254,22 +254,31 @@ int main(int argc, char* argv[])
 				char* token = strtok(buff, " ");
 
 				token = strtok(NULL, " ");
+				token = strtok(NULL, " ");
 				numVert = atoi(token);
 				
 				token = strtok(NULL, " ");
-				numEdge = atoi(token);
+				numEdge = atoi(token) * 2;
 
 				h_edge = (int*)malloc(sizeof(int) * numEdge * 2);
 
 			}
-			else if(buff[0] == '#')
+			else if(buff[0] == '#' || buff[0] == 'c')
 				continue;
-			else if(buff[0] > ' ')
+			else if(buff[0] == 'a')
 			{
 				char* token = strtok(buff, " ");
-				h_edge[edgeCnt++] = atoi(token);
+
+				//Skip 'a'
 				token = strtok(NULL, " ");
-				h_edge[edgeCnt++] = atoi(token);
+				int e1 = atoi(token) - 1;
+				h_edge[edgeCnt] = e1;
+				h_edge[edgeCnt + 3] = e1;
+				token = strtok(NULL, " ");
+				int e2 = atoi(token) - 1;
+				h_edge[edgeCnt + 1] = e2;
+				h_edge[edgeCnt + 2] = e2;
+				edgeCnt += 4;
 			}
 		}
 	}
@@ -285,15 +294,15 @@ int main(int argc, char* argv[])
 	cudaMemcpy(d_edge, h_edge, sizeof(int) * numEdge * 2, cudaMemcpyHostToDevice);
 	
 	dim3 block(BLOCK_WIDTH, BLOCK_HEIGHT);
-	int gridSize = ceil(elements / (float)(BLOCK_WIDTH * BLOCK_HEIGHT));
+	int gridSize = ceil(numVert / (float)(BLOCK_WIDTH * BLOCK_HEIGHT));
 	dim3 grid(gridSize);
 	//test<<<grid,block>>>(d_mem);
 	betweennessCentrality<<<grid,block>>>(numVert, numEdge, d_edge, d_bc, d_glob, d_dep);
 	cudaError_t error = cudaGetLastError();
 	
-	int* h_mem = (int*)malloc(sizeof(int) * elements);
-	cudaMemcpy(h_mem, d_mem, sizeof(int) * elements, cudaMemcpyDeviceToHost);
-	cudaMemcpy(h_bc, d_bc, sizeof(float) * elements, cudaMemcpyDeviceToHost);
+	int* h_mem = (int*)malloc(sizeof(int) * numVert);
+	cudaMemcpy(h_mem, d_mem, sizeof(int) * numVert, cudaMemcpyDeviceToHost);
+	cudaMemcpy(h_bc, d_bc, sizeof(float) * numVert, cudaMemcpyDeviceToHost);
 	
 
 	for(int i = 0; i < numVert; i++)
