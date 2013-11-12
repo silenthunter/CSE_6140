@@ -8,6 +8,7 @@ __device__ const int MAX_DEGREE = 4;
 
 const int BLOCK_WIDTH = 2;
 const int BLOCK_HEIGHT = 2;
+const int DEFAULT_ELE = 1024;
 
 __device__ void sortEdges(int* edges, int* sorted)
 {
@@ -66,16 +67,22 @@ __device__ int popStack(int* stack, int* head)
 	return retn;
 }
 
-const int ELEMENTS = 8;
-const int S_SIZE = ELEMENTS;
-const int P_SIZE = ELEMENTS;
-const int PATH_SIZE = ELEMENTS;
-const int D_SIZE = ELEMENTS;
-const int Q_SIZE = ELEMENTS;
-
+__device__ int ELEMENTS = DEFAULT_ELE;
+__device__ int S_SIZE;
+__device__ int P_SIZE;
+__device__ int PATH_SIZE;
+__device__ int D_SIZE;
+__device__ int Q_SIZE;
 
 __device__ void doAlg(int numVert, int* edges, int numEdges, float* BC, int* glob, float* globDep)
 {
+	S_SIZE = numVert;
+	P_SIZE = numVert;
+	D_SIZE = numVert;
+	Q_SIZE = numVert;
+	PATH_SIZE = numVert;
+	ELEMENTS = numVert;
+
 	int x = blockDim.x * blockIdx.x + threadIdx.x;	
 	int y = blockDim.y * blockIdx.y + threadIdx.y;	
 	int idx = x + y * blockDim.x * gridDim.x;
@@ -185,6 +192,8 @@ __global__ void betweennessCentrality(int numVert, int numEdges, int *edges, flo
 	int y = blockDim.y * blockIdx.x + threadIdx.y;	
 	int idx = x + y * blockDim.x * gridDim.x;
 
+	if(idx >= numVert) return;
+
 	BC[idx] = 0.0f;
 
 	__syncthreads();
@@ -196,7 +205,7 @@ __global__ void betweennessCentrality(int numVert, int numEdges, int *edges, flo
 
 int main(int argc, char* argv[])
 {
-	const int elements = ELEMENTS;
+	int elements = DEFAULT_ELE;
 
 	//cudaProfilerStart();
 	int *d_mem;
@@ -210,29 +219,20 @@ int main(int argc, char* argv[])
 	int numVert = elements;
 	int numEdge = elements - 1;
 	
-	cudaMalloc((void**)&d_mem, sizeof(int) * elements);
-	
-	h_edge = (int*)malloc(sizeof(int) * elements * 4);
-	cudaMalloc((void**)&d_edge, sizeof(int) * elements * 4);
-
-	h_bc = (float*)malloc(sizeof(float) * elements);
-	cudaMalloc((void**)&d_bc, sizeof(float) * elements);
-
-	cudaMalloc((void**)&d_glob, sizeof(int) * elements * elements * 8);
-	cudaMalloc((void**)&d_dep, sizeof(float) * elements * elements);
 
 	if(argc < 2)
 	{
 
 		FILE *grFile;
 		grFile = fopen("test.gr", "w");
-		fprintf(grFile, "p %d %d d u 0\n", elements, elements - 1);
+		fprintf(grFile, "p %d %d d u 0\n", numVert, numEdge);
+		h_edge = (int*)malloc(sizeof(int) * numEdge * 2);
 		
 		//Init edges
 		for(int i = 0; i < numEdge; i++)
 		{
-			h_edge[i * 2] = i % elements;
-			h_edge[i * 2 + 1] = (i + 1) % elements;
+			h_edge[i * 2] = i % numVert;
+			h_edge[i * 2 + 1] = (i + 1) % numVert;
 			fprintf(grFile, "%d %d\n", h_edge[i * 2], h_edge[i * 2 + 1]);
 		}
 		fclose(grFile);
@@ -258,6 +258,9 @@ int main(int argc, char* argv[])
 				
 				token = strtok(NULL, " ");
 				numEdge = atoi(token);
+
+				h_edge = (int*)malloc(sizeof(int) * numEdge * 2);
+
 			}
 			else if(buff[0] == '#')
 				continue;
@@ -270,10 +273,20 @@ int main(int argc, char* argv[])
 			}
 		}
 	}
-	cudaMemcpy(d_edge, h_edge, sizeof(int) * elements * 4, cudaMemcpyHostToDevice);
+	h_bc = (float*)malloc(sizeof(float) * numVert);
+	cudaMalloc((void**)&d_mem, sizeof(int) * numVert);
+	
+	cudaMalloc((void**)&d_edge, sizeof(int) * numEdge * 2);
+
+	cudaMalloc((void**)&d_bc, sizeof(float) * numVert);
+
+	cudaMalloc((void**)&d_glob, sizeof(int) * numVert * numVert * 8);
+	cudaMalloc((void**)&d_dep, sizeof(float) * numVert * numVert);
+	cudaMemcpy(d_edge, h_edge, sizeof(int) * numEdge * 2, cudaMemcpyHostToDevice);
 	
 	dim3 block(BLOCK_WIDTH, BLOCK_HEIGHT);
-	dim3 grid(elements / (BLOCK_WIDTH * BLOCK_HEIGHT));
+	int gridSize = ceil(elements / (float)(BLOCK_WIDTH * BLOCK_HEIGHT));
+	dim3 grid(gridSize);
 	//test<<<grid,block>>>(d_mem);
 	betweennessCentrality<<<grid,block>>>(numVert, numEdge, d_edge, d_bc, d_glob, d_dep);
 	cudaError_t error = cudaGetLastError();
@@ -283,7 +296,7 @@ int main(int argc, char* argv[])
 	cudaMemcpy(h_bc, d_bc, sizeof(float) * elements, cudaMemcpyDeviceToHost);
 	
 
-	for(int i = 0; i < elements; i++)
+	for(int i = 0; i < numVert; i++)
 	{
 		cout << h_bc[i] << endl;
 	}
