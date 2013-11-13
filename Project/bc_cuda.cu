@@ -4,11 +4,11 @@
 
 using namespace std;
 
-__device__ const int MAX_DEGREE = 50;
+__device__ const int MAX_DEGREE = 4;
 
-const int BLOCK_WIDTH = 2;
-const int BLOCK_HEIGHT = 2;
-const int DEFAULT_ELE = 1024;
+const int BLOCK_WIDTH = 1;
+const int BLOCK_HEIGHT = 1;
+const int DEFAULT_ELE = 3;
 
 __device__ void sortEdges(int* edges, int* sorted)
 {
@@ -185,7 +185,7 @@ __device__ void doAlg(int numVert, int* edges, int numEdges, float* BC, int* glo
 
 __global__ void betweennessCentrality(int numVert, int numEdges, int *edges, float* BC, int* glob, float* dep)
 {
-	extern __shared__ int path[];
+	//extern __shared__ int path[];
 	
 	//sortEdges(edges, path);
 	int x = blockDim.x * blockIdx.x + threadIdx.x;	
@@ -282,21 +282,28 @@ int main(int argc, char* argv[])
 			}
 		}
 	}
+	long totalMem = 0;
 	h_bc = (float*)malloc(sizeof(float) * numVert);
 	cudaMalloc((void**)&d_mem, sizeof(int) * numVert);
+	totalMem += sizeof(int) * numVert;
 	
 	cudaMalloc((void**)&d_edge, sizeof(int) * numEdge * 2);
+	totalMem += sizeof(int) * numEdge * 2;
 
 	cudaMalloc((void**)&d_bc, sizeof(float) * numVert);
+	totalMem += sizeof(float) * numVert;
 
-	cudaMalloc((void**)&d_glob, sizeof(int) * numVert * numVert * 8);
+	cudaMalloc((void**)&d_glob, sizeof(int) * numVert * ((numVert * 5) + MAX_DEGREE));
+	totalMem += sizeof(int) * numVert * numVert * MAX_DEGREE * 8;
+
 	cudaMalloc((void**)&d_dep, sizeof(float) * numVert * numVert);
+	totalMem += sizeof(float) * numVert * numVert;
+
 	cudaMemcpy(d_edge, h_edge, sizeof(int) * numEdge * 2, cudaMemcpyHostToDevice);
 	
 	dim3 block(BLOCK_WIDTH, BLOCK_HEIGHT);
 	int gridSize = ceil(numVert / (float)(BLOCK_WIDTH * BLOCK_HEIGHT));
 	dim3 grid(gridSize);
-	//test<<<grid,block>>>(d_mem);
 	betweennessCentrality<<<grid,block>>>(numVert, numEdge, d_edge, d_bc, d_glob, d_dep);
 	cudaError_t error = cudaGetLastError();
 	
@@ -315,6 +322,7 @@ int main(int argc, char* argv[])
 	
 	cudaDeviceReset();
 	cout << cudaGetErrorString(error) << endl;
+	cout << totalMem << endl;
 	
 	return 0;
 }
