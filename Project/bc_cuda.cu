@@ -1,6 +1,7 @@
 #include <cuda.h>
 #include <stdio.h>
 #include <iostream>
+#include <sys/time.h>
 
 using namespace std;
 
@@ -221,7 +222,6 @@ int main(int argc, char* argv[])
 
 	int numVert = elements;
 	int numEdge = elements - 1;
-	
 
 	if(argc < 2)
 	{
@@ -285,6 +285,9 @@ int main(int argc, char* argv[])
 			}
 		}
 	}
+	struct timeval totalStart, totalEnd;
+	gettimeofday(&totalStart, NULL);
+
 	long totalMem = 0;
 	h_bc = (float*)malloc(sizeof(float) * numVert);
 	cudaMalloc((void**)&d_mem, sizeof(int) * numVert);
@@ -299,7 +302,8 @@ int main(int argc, char* argv[])
 	cudaMalloc((void**)&d_glob, sizeof(int) * numVert * (numVert * 5));
 	totalMem += sizeof(int) * numVert * ((numVert * 5));
 
-	cudaMalloc((void**)&pList, sizeof(linkNode) * numEdge * numVert);
+	cudaMalloc((void**)&pList, sizeof(linkNode) * numEdge * (numVert + numVert));
+	totalMem += sizeof(linkNode) * numEdge * (numVert + numVert);
 
 	cudaMalloc((void**)&d_dep, sizeof(float) * numVert * numVert);
 	totalMem += sizeof(float) * numVert * numVert;
@@ -309,13 +313,24 @@ int main(int argc, char* argv[])
 	dim3 block(BLOCK_WIDTH, BLOCK_HEIGHT);
 	int gridSize = ceil(numVert / (float)(BLOCK_WIDTH * BLOCK_HEIGHT));
 	dim3 grid(gridSize);
+
+	struct timeval start, end;
+
+	gettimeofday(&start, NULL);
 	betweennessCentrality<<<grid,block>>>(numVert, numEdge, d_edge, pList, d_bc, d_glob, d_dep);
+	cudaDeviceSynchronize();
+	gettimeofday(&end, NULL);
+	long elapsed = (end.tv_sec * 1000000 + end.tv_usec) - (start.tv_sec * 1000000 + start.tv_usec);
+
 	cudaError_t error = cudaGetLastError();
 	
 	int* h_mem = (int*)malloc(sizeof(int) * numVert);
 	cudaMemcpy(h_mem, d_mem, sizeof(int) * numVert, cudaMemcpyDeviceToHost);
 	cudaMemcpy(h_bc, d_bc, sizeof(float) * numVert, cudaMemcpyDeviceToHost);
-	
+
+	gettimeofday(&totalEnd, NULL);
+	long totalElapsed = (totalEnd.tv_sec * 1000000 + totalEnd.tv_usec) - 
+		( totalStart.tv_sec * 1000000 + totalStart.tv_usec); 
 
 	for(int i = 0; i < numVert; i++)
 	{
@@ -327,7 +342,9 @@ int main(int argc, char* argv[])
 	
 	cudaDeviceReset();
 	cout << cudaGetErrorString(error) << endl;
-	cout << totalMem << endl;
+	cout << "Mem Used: " << totalMem << endl;
+	cout << "Time(usec): " << elapsed << endl;
+	cout << "Total Time(usec): " << totalElapsed << endl;
 	
 	return 0;
 }
