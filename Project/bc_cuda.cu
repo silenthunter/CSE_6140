@@ -4,26 +4,15 @@
 
 using namespace std;
 
-__device__ const int MAX_DEGREE = 4;
+const int BLOCK_WIDTH = 16;
+const int BLOCK_HEIGHT = 16;
+const int DEFAULT_ELE = 16;
 
-const int BLOCK_WIDTH = 1;
-const int BLOCK_HEIGHT = 1;
-const int DEFAULT_ELE = 3;
-
-__device__ void sortEdges(int* edges, int* sorted)
+typedef struct __align__(8) linkNode
 {
-	int x = blockDim.x * blockIdx.x + threadIdx.x;
-	int y = blockDim.y * blockIdx.y + threadIdx.y;
-	int i = x + y * gridDim.x * blockDim.x;
-	int n1 = edges[i * 2];
-	int n2 = edges[i * 2 + 1];
-	
-	int* arrStart = &sorted[n1 * MAX_DEGREE];
-	int retnVal = 1;
-	while(retnVal != 0)
-		retnVal = atomicCAS(arrStart, 0, n2);
-}
-
+	int edge;
+	linkNode* next;
+} linkNode;
 
 //HACK: This will be incredibly slow  on CUDA!
 __device__ int findNext(int* edges, int numEdge, int v, int* destination)
@@ -74,10 +63,10 @@ __device__ int PATH_SIZE;
 __device__ int D_SIZE;
 __device__ int Q_SIZE;
 
-__device__ void doAlg(int numVert, int* edges, int numEdges, float* BC, int* glob, float* globDep)
+__device__ void doAlg(int numVert, int* edges, int numEdges, linkNode* pList, float* BC, int* glob, float* globDep)
 {
 	S_SIZE = numVert;
-	P_SIZE = numVert;
+	P_SIZE = numEdges + numVert;
 	D_SIZE = numVert;
 	Q_SIZE = numVert;
 	PATH_SIZE = numVert;
@@ -87,20 +76,19 @@ __device__ void doAlg(int numVert, int* edges, int numEdges, float* BC, int* glo
 	int y = blockDim.y * blockIdx.y + threadIdx.y;	
 	int idx = x + y * blockDim.x * gridDim.x;
 
-	int PTR_OFFSET = idx * (S_SIZE + (P_SIZE * MAX_DEGREE) + D_SIZE + Q_SIZE + PATH_SIZE);
+	unsigned int PTR_OFFSET = idx * (S_SIZE + D_SIZE + Q_SIZE + PATH_SIZE);
 	
 	int* S = &glob[PTR_OFFSET];
 	int S_head = 0;
 	PTR_OFFSET += S_SIZE;
 	
-	int* P = &glob[PTR_OFFSET];
+	linkNode* P = &pList[idx * P_SIZE];
 	//Blank the previous items
 	for(int i = 0; i < P_SIZE; i++)
-		for(int j = 0; j < MAX_DEGREE; j++)
-		{
-			P[i + P_SIZE * j] = -1;
-		}
-	PTR_OFFSET += P_SIZE * MAX_DEGREE;
+	{
+		P[i].edge = -1;
+		P[i].next = NULL;
+	}
 
 	int* pathCount = &glob[PTR_OFFSET];
 	for(int i = 0; i < PATH_SIZE; i++)
@@ -130,7 +118,7 @@ __device__ void doAlg(int numVert, int* edges, int numEdges, float* BC, int* glo
 		int v = popQueue(Q, Q_SIZE, &Q_head, &Q_tail);
 		pushStack(v, S, &S_head);
 
-		int w[MAX_DEGREE];
+		int w[1024];
 		int edgeCount = findNext(edges, numEdges, v, w);
 
 		for(int i = 0; i < edgeCount; i++)
@@ -147,14 +135,26 @@ __device__ void doAlg(int numVert, int* edges, int numEdges, float* BC, int* glo
 				pathCount[wNode] = pathCount[wNode] + pathCount[v];
 				
 				//Append v to the PrevNode list
-				for(int j = 0; j < MAX_DEGREE; j++)
+
+				//Find the next empty slot. Start after the initial lookup indices
+				if(P[wNode].edge < 0) P[wNode].edge = v;
+				else
 				{
-					if(P[wNode + P_SIZE * j] < 0)
+					linkNode* empty;
+					for(empty = &P[numVert]; empty->edge >= 0; empty++);
+
+					linkNode* j = &P[wNode];
+					linkNode* last = NULL;
+					while(j !=  NULL)
 					{
-						P[wNode + P_SIZE * j] = v;
-						break;
+						last = j;
+						j = j->next;
 					}
+					last->next = empty;
+					empty->edge = v;
 				}
+				
+				
 			}
 		}
 
@@ -167,13 +167,15 @@ __device__ void doAlg(int numVert, int* edges, int numEdges, float* BC, int* glo
 		int w = popStack(S, &S_head);
 		
 		//Loop through each v in P[w]
-		for(int i = 0; i < MAX_DEGREE; i++)
+		linkNode* node = &P[w];
+		do
 		{
-			int v = P[w + P_SIZE * i];
+			int v = node->edge;
+			node = node->next;
 			if(v < 0) continue;
 
 			dep[v] = dep[v] + ((float)pathCount[v]/(float)pathCount[w]) * (1 + dep[w]);
-		}
+		}while(node != NULL);
 		
 		if(w != idx)
 		{
@@ -183,7 +185,7 @@ __device__ void doAlg(int numVert, int* edges, int numEdges, float* BC, int* glo
 	
 }
 
-__global__ void betweennessCentrality(int numVert, int numEdges, int *edges, float* BC, int* glob, float* dep)
+__global__ void betweennessCentrality(int numVert, int numEdges, int *edges, linkNode* pList, float* BC, int* glob, float* dep)
 {
 	//extern __shared__ int path[];
 	
@@ -198,7 +200,7 @@ __global__ void betweennessCentrality(int numVert, int numEdges, int *edges, flo
 
 	__syncthreads();
 
-	doAlg(numVert, edges, numEdges, BC, glob, dep);
+	doAlg(numVert, edges, numEdges, pList, BC, glob, dep);
 
 		
 }
@@ -211,6 +213,7 @@ int main(int argc, char* argv[])
 	int *d_mem;
 	int *h_edge;
 	int *d_edge;
+	linkNode* pList;
 	float *d_bc;
 	float *h_bc;
 	int *d_glob;
@@ -293,8 +296,10 @@ int main(int argc, char* argv[])
 	cudaMalloc((void**)&d_bc, sizeof(float) * numVert);
 	totalMem += sizeof(float) * numVert;
 
-	cudaMalloc((void**)&d_glob, sizeof(int) * numVert * ((numVert * 5) + MAX_DEGREE));
-	totalMem += sizeof(int) * numVert * numVert * MAX_DEGREE * 8;
+	cudaMalloc((void**)&d_glob, sizeof(int) * numVert * (numVert * 5));
+	totalMem += sizeof(int) * numVert * ((numVert * 5));
+
+	cudaMalloc((void**)&pList, sizeof(linkNode) * numEdge * numVert);
 
 	cudaMalloc((void**)&d_dep, sizeof(float) * numVert * numVert);
 	totalMem += sizeof(float) * numVert * numVert;
@@ -304,7 +309,7 @@ int main(int argc, char* argv[])
 	dim3 block(BLOCK_WIDTH, BLOCK_HEIGHT);
 	int gridSize = ceil(numVert / (float)(BLOCK_WIDTH * BLOCK_HEIGHT));
 	dim3 grid(gridSize);
-	betweennessCentrality<<<grid,block>>>(numVert, numEdge, d_edge, d_bc, d_glob, d_dep);
+	betweennessCentrality<<<grid,block>>>(numVert, numEdge, d_edge, pList, d_bc, d_glob, d_dep);
 	cudaError_t error = cudaGetLastError();
 	
 	int* h_mem = (int*)malloc(sizeof(int) * numVert);
