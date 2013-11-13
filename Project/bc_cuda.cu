@@ -4,26 +4,11 @@
 
 using namespace std;
 
-__device__ const int MAX_DEGREE = 50;
+__device__ const int MAX_DEGREE = 5;
 
 const int BLOCK_WIDTH = 2;
 const int BLOCK_HEIGHT = 2;
-const int DEFAULT_ELE = 1024;
-
-__device__ void sortEdges(int* edges, int* sorted)
-{
-	int x = blockDim.x * blockIdx.x + threadIdx.x;
-	int y = blockDim.y * blockIdx.y + threadIdx.y;
-	int i = x + y * gridDim.x * blockDim.x;
-	int n1 = edges[i * 2];
-	int n2 = edges[i * 2 + 1];
-	
-	int* arrStart = &sorted[n1 * MAX_DEGREE];
-	int retnVal = 1;
-	while(retnVal != 0)
-		retnVal = atomicCAS(arrStart, 0, n2);
-}
-
+const int DEFAULT_ELE = 32;
 
 //HACK: This will be incredibly slow  on CUDA!
 __device__ int findNext(int* edges, int numEdge, int v, int* destination)
@@ -87,100 +72,6 @@ __device__ void doAlg(int numVert, int* edges, int numEdges, float* BC, int* glo
 	int y = blockDim.y * blockIdx.y + threadIdx.y;	
 	int idx = x + y * blockDim.x * gridDim.x;
 
-	int PTR_OFFSET = idx * (S_SIZE + (P_SIZE * MAX_DEGREE) + D_SIZE + Q_SIZE + PATH_SIZE);
-	
-	int* S = &glob[PTR_OFFSET];
-	int S_head = 0;
-	PTR_OFFSET += S_SIZE;
-	
-	int* P = &glob[PTR_OFFSET];
-	//Blank the previous items
-	for(int i = 0; i < P_SIZE; i++)
-		for(int j = 0; j < MAX_DEGREE; j++)
-		{
-			P[i + P_SIZE * j] = -1;
-		}
-	PTR_OFFSET += P_SIZE * MAX_DEGREE;
-
-	int* pathCount = &glob[PTR_OFFSET];
-	for(int i = 0; i < PATH_SIZE; i++)
-	{
-		pathCount[i] = 0;
-	}
-	pathCount[idx] = 1;
-	PTR_OFFSET += PATH_SIZE;
-
-	int* d = &glob[PTR_OFFSET];
-	for(int i = 0; i < D_SIZE; i++)
-	{
-		d[i] = -1;
-	}
-	d[idx] = 0;
-	PTR_OFFSET += D_SIZE;
-	
-	int* Q = &glob[PTR_OFFSET];
-	int Q_head = 0;
-	int Q_tail = 0;
-	PTR_OFFSET += Q_SIZE;
-	
-	pushQueue(idx, Q, Q_SIZE, &Q_head, &Q_tail);
-
-	while(Q_head != Q_tail)
-	{
-		int v = popQueue(Q, Q_SIZE, &Q_head, &Q_tail);
-		pushStack(v, S, &S_head);
-
-		int w[MAX_DEGREE];
-		int edgeCount = findNext(edges, numEdges, v, w);
-
-		for(int i = 0; i < edgeCount; i++)
-		{
-			int wNode = w[i];
-			if(d[wNode] < 0)
-			{
-				pushQueue(wNode, Q, Q_SIZE, &Q_head, &Q_tail);
-				d[wNode] = d[v] + 1;
-			}
-			
-			if(d[wNode] == d[v] + 1)
-			{
-				pathCount[wNode] = pathCount[wNode] + pathCount[v];
-				
-				//Append v to the PrevNode list
-				for(int j = 0; j < MAX_DEGREE; j++)
-				{
-					if(P[wNode + P_SIZE * j] < 0)
-					{
-						P[wNode + P_SIZE * j] = v;
-						break;
-					}
-				}
-			}
-		}
-
-	}
-	
-	float* dep = &globDep[idx * ELEMENTS];
-	
-	while(S_head > 0)
-	{
-		int w = popStack(S, &S_head);
-		
-		//Loop through each v in P[w]
-		for(int i = 0; i < MAX_DEGREE; i++)
-		{
-			int v = P[w + P_SIZE * i];
-			if(v < 0) continue;
-
-			dep[v] = dep[v] + ((float)pathCount[v]/(float)pathCount[w]) * (1 + dep[w]);
-		}
-		
-		if(w != idx)
-		{
-			atomicAdd(&BC[w], dep[w]);
-		}
-	}
-	
 }
 
 __global__ void betweennessCentrality(int numVert, int numEdges, int *edges, float* BC, int* glob, float* dep)
@@ -296,22 +187,13 @@ int main(int argc, char* argv[])
 	dim3 block(BLOCK_WIDTH, BLOCK_HEIGHT);
 	int gridSize = ceil(numVert / (float)(BLOCK_WIDTH * BLOCK_HEIGHT));
 	dim3 grid(gridSize);
-	//test<<<grid,block>>>(d_mem);
 	betweennessCentrality<<<grid,block>>>(numVert, numEdge, d_edge, d_bc, d_glob, d_dep);
-	cudaError_t error = cudaGetLastError();
-	
-	int* h_mem = (int*)malloc(sizeof(int) * numVert);
-	cudaMemcpy(h_mem, d_mem, sizeof(int) * numVert, cudaMemcpyDeviceToHost);
-	cudaMemcpy(h_bc, d_bc, sizeof(float) * numVert, cudaMemcpyDeviceToHost);
-	
 
 	for(int i = 0; i < numVert; i++)
 	{
 		cout << h_bc[i] << endl;
 	}
-	//cout<<elements<<endl;
 	
-	//cudaProfilerStop();
 	
 	cudaDeviceReset();
 	cout << cudaGetErrorString(error) << endl;
