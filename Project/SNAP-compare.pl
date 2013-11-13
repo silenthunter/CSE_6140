@@ -6,7 +6,7 @@ open(CUDA, $ARGV[1]);
 my %snapBC;
 my %cudaBC;
 
-my $e = .07;
+my $e = .05;
 
 while(<SNAP>)
 {
@@ -41,7 +41,7 @@ foreach my $key (keys(%snapBC))
 	my $snapNum = $snapBC{$key};
 	my $cudaNum = $cudaBC{$key};
 	
-	my $result = $snapNum - $cudaNum;
+	my $result = abs($snapNum - $cudaNum);
 	if($result > $snapNum * $e)
 	{
 		print $key." = ". $snapBC{$key}." : ".$cudaBC{$key}."\n";
