@@ -111,7 +111,7 @@ __device__ void doAlg(int numVert, int* edges, int numEdges, linkNode* pList, fl
 	
 	linkNode* P = &pList[block_idx * P_SIZE];
 	//Blank the previous items
-	for(int i = 0; i < P_SIZE; i++)
+	for(int i = 0; i < P_SIZE && localIdx == 0; i++)
 	{
 		P[i].edge = -1;
 		P[i].next = NULL;
@@ -136,17 +136,26 @@ __device__ void doAlg(int numVert, int* edges, int numEdges, linkNode* pList, fl
 	int* Q = &glob[PTR_OFFSET];
 	unsigned int* Q_head = (unsigned int*)&shmem[2];
 	unsigned int* Q_tail = (unsigned int*)&shmem[3];
-	*Q_head = 0;
-	*Q_tail = 0;
+	if(localIdx == 0)
+	{
+		*Q_head = 0;
+		*Q_tail = 0;
+	}
 	PTR_OFFSET += Q_SIZE;
 	
 	if(localIdx == 0)
 		pushQueue(block_idx, Q, Q_SIZE, Q_head, Q_tail);
 
-	unsigned int* front = (unsigned int*)&shmem[0];
-	unsigned int* nextFront = (unsigned int*)&shmem[1];
-	*front = 1;
-	*nextFront = 0;
+	int* front = &shmem[0];
+	int* nextFront = &shmem[1];
+	if(localIdx == 0)
+	{
+		*front = 1;
+		*nextFront = 0;
+	}
+
+	int* testCnt = &shmem[5];
+	*testCnt = 0;
 
 	while(*Q_head != *Q_tail || *front != 0 || *nextFront != 0)
 	{
@@ -158,9 +167,12 @@ __device__ void doAlg(int numVert, int* edges, int numEdges, linkNode* pList, fl
 		}
 		__syncthreads();
 		int v = -1;
-		if(atomicDec(front, Q_SIZE))
+		int atmSub = atomicSub(front, 1);
+		if(atmSub > 0)
 			v = popQueue(Q, Q_SIZE, Q_head, Q_tail);
-		//if(v < 0) continue;
+		else
+			atomicAdd(front, 1);//Don't let the counter go below 0
+		if(v < 0) continue;
 
 		pushStack(v, S, S_head);
 
@@ -170,12 +182,11 @@ __device__ void doAlg(int numVert, int* edges, int numEdges, linkNode* pList, fl
 		for(int i = 0; i < edgeCount; i++)
 		{
 			int wNode = w[i];
-			if(d[wNode] < 0)
+			if(d[wNode] < 0 && atomicCAS(&d[wNode], -1, d[v] + 1) == -1)
 			{
-
 				pushQueue(wNode, Q, Q_SIZE, Q_head, Q_tail);
 				atomicAdd(nextFront, 1);//Frontier expands
-				d[wNode] = d[v] + 1;
+				//d[wNode] = d[v] + 1;
 			}
 
 			if(d[wNode] == d[v] + 1)
@@ -188,8 +199,15 @@ __device__ void doAlg(int numVert, int* edges, int numEdges, linkNode* pList, fl
 				if(P[wNode].edge < 0) P[wNode].edge = v;
 				else
 				{
+					atomicAdd(testCnt, 1);
 					linkNode* empty;
-					for(empty = &P[numVert]; empty->edge >= 0; empty++);
+					int casToken = 0;
+					int tempCnt = 0;
+					for(empty = &P[numVert]; casToken != -1 && tempCnt < numEdges; empty++)
+					{
+						tempCnt++;
+						casToken = atomicCAS(&(empty->edge), -1, 0);
+					}
 
 					linkNode* j = &P[wNode];
 					linkNode* last = NULL;
@@ -348,8 +366,8 @@ int main(int argc, char* argv[])
 	cudaMalloc((void**)&d_glob, sizeof(int) * numVert * (numVert * 5));
 	totalMem += sizeof(int) * numVert * ((numVert * 5));
 
-	cudaMalloc((void**)&pList, sizeof(linkNode) * numEdge * (numVert + numVert));
-	totalMem += sizeof(linkNode) * numEdge * (numVert + numVert);
+	cudaMalloc((void**)&pList, sizeof(linkNode) * numVert * (numVert + numEdge));
+	totalMem += sizeof(linkNode) * numVert * (numVert + numEdge);
 
 	cudaMalloc((void**)&d_dep, sizeof(float) * numVert * numVert);
 	totalMem += sizeof(float) * numVert * numVert;
@@ -363,7 +381,7 @@ int main(int argc, char* argv[])
 	struct timeval start, end;
 
 	gettimeofday(&start, NULL);
-	betweennessCentrality<<<grid,block, 20>>>(numVert, numEdge, d_edge, pList, d_bc, d_glob, d_dep);
+	betweennessCentrality<<<grid,block, 512>>>(numVert, numEdge, d_edge, pList, d_bc, d_glob, d_dep);
 	cudaDeviceSynchronize();
 	gettimeofday(&end, NULL);
 	long elapsed = (end.tv_sec * 1000000 + end.tv_usec) - (start.tv_sec * 1000000 + start.tv_usec);
