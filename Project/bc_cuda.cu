@@ -5,31 +5,16 @@
 
 using namespace std;
 
-const int BLOCK_WIDTH = 2;
-const int BLOCK_HEIGHT = 2;
+const int BLOCK_WIDTH = 1;
+const int BLOCK_HEIGHT = 1;
 const int DEFAULT_ELE = 16;
 extern __shared__ int shmem[];
-const int LOCK = 0;
-const int WARP_SIZE = 32;
 
 typedef struct __align__(8) linkNode
 {
 	int edge;
-	linkNode* next;
+	int next;
 } linkNode;
-
-/*__device__ void lock()
-{
-	int localId = threadIdx.x + threadIdx.y * blockDim.x;
-	for(int i = 0; i < blockDim.x * blockDim.y; i++)
-		if(localId == i)
-			while(atomicCAS(&shmem[LOCK], 0, 1) == 1);
-}
-
-__device__ void unlock()
-{
-	atomicExch(&shmem[LOCK], 0);
-}*/
 
 //HACK: This will be incredibly slow  on CUDA!
 __device__ int findNext(int* edges, int numEdge, int v, int* destination)
@@ -114,7 +99,7 @@ __device__ void doAlg(int numVert, int* edges, int numEdges, linkNode* pList, fl
 	for(int i = 0; i < P_SIZE && localIdx == 0; i++)
 	{
 		P[i].edge = -1;
-		P[i].next = NULL;
+		P[i].next = -1;
 	}
 
 	int* pathCount = &glob[PTR_OFFSET];
@@ -186,38 +171,34 @@ __device__ void doAlg(int numVert, int* edges, int numEdges, linkNode* pList, fl
 			{
 				pushQueue(wNode, Q, Q_SIZE, Q_head, Q_tail);
 				atomicAdd(nextFront, 1);//Frontier expands
-				//d[wNode] = d[v] + 1;
 			}
 
 			if(d[wNode] == d[v] + 1)
 			{
-				pathCount[wNode] = pathCount[wNode] + pathCount[v];
+				atomicAdd(&pathCount[wNode], pathCount[v]);
+				//pathCount[wNode] = pathCount[wNode] + pathCount[v];
 				
 				//Append v to the PrevNode list
 
 				//Find the next empty slot. Start after the initial lookup indices
-				if(P[wNode].edge < 0) P[wNode].edge = v;
+				if(atomicCAS(&P[wNode].edge, -1, v) < 0);
 				else
 				{
 					atomicAdd(testCnt, 1);
-					linkNode* empty;
+					int empty;
 					int casToken = 0;
-					int tempCnt = 0;
-					for(empty = &P[numVert]; casToken != -1 && tempCnt < numEdges; empty++)
+					for(empty = numVert; casToken != -1; empty++)
 					{
-						tempCnt++;
-						casToken = atomicCAS(&(empty->edge), -1, 0);
+						casToken = atomicCAS(&P[empty].edge, -1, v);
 					}
+					empty--;
 
 					linkNode* j = &P[wNode];
-					linkNode* last = NULL;
-					while(j !=  NULL)
+					//while(j !=  NULL)
+					while(atomicCAS(&(j->next), -1, empty) >= 0)
 					{
-						last = j;
-						j = j->next;
+						j = &P[j->next];
 					}
-					last->next = empty;
-					empty->edge = v;
 				}
 				
 				
@@ -233,16 +214,18 @@ __device__ void doAlg(int numVert, int* edges, int numEdges, linkNode* pList, fl
 	while(*S_head > 0 && localIdx == 0)
 	{
 		int w = popStack(S, S_head);
+		if(w == block_idx) continue;
 		
 		//Loop through each v in P[w]
 		linkNode* node = &P[w];
 		while(node != NULL)
 		{
 			int v = node->edge;
-			node = node->next;
 			if(v < 0) continue;
 
 			dep[v] = dep[v] + ((float)pathCount[v]/(float)pathCount[w]) * (1 + dep[w]);
+
+			node = node->next < 0 ? NULL : &P[node->next];
 		}
 		
 		if(w != block_idx)
