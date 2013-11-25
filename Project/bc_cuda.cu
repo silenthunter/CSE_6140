@@ -16,15 +16,52 @@ typedef struct __align__(8) linkNode
 	int next;
 } linkNode;
 
-//HACK: This will be incredibly slow  on CUDA!
-__device__ int findNext(int* edges, int numEdge, int v, int* destination)
+//Create CSR edge storage
+__global__ void convertEdges(int* edges, int numEdge, int numVert, int* newArrays)
 {
-	int count = 0;
+	int* val = newArrays;
+	int* col = &val[numEdge];// + numEdge;
+	int* row = &col[numEdge];
 
-	for(int i = 0; i < numEdge * 2; i+=2)
+	int lastRow = -1;
+	int rowNum = 0;
+	for(int i = 0; i < numEdge; i++)
 	{
-		if(edges[i] == v)
-			destination[count++] = edges[i + 1];
+		int v1 = edges[i * 2];//Row
+		int v2 = edges[i * 2 + 1];//Col
+
+		val[i] = 1;//Weight
+		col[i] = v2;
+
+		if(lastRow != v1)
+		{
+			//Make sure to skip unconnected vertices
+			int diff = v1 - lastRow;
+			for(int j = 0; j < diff - 1; j++)
+				row[rowNum++] = i;
+			row[rowNum++] = i;
+			lastRow = v1;
+		}
+	}
+
+	//Fill in final row columns
+	for(int i = rowNum; i <= numVert; i++)
+		row[i] = numEdge;
+}
+
+__device__ int findNext(int* edges, int numEdge, int numVert, int v, int* destination)
+{
+	int* val = edges;
+	int* col = &val[numEdge];
+	int* row = &col[numEdge];
+
+	int idx = row[v];
+	int nextIdx = row[v + 1];
+
+	int count = 0;
+	for(int i = idx; i < nextIdx; i++)
+	{
+		destination[count++] = col[i];
 	}
 
 	return count;
@@ -162,7 +199,7 @@ __device__ void doAlg(int numVert, int* edges, int numEdges, linkNode* pList, fl
 		pushStack(v, S, S_head);
 
 		int w[1024];
-		int edgeCount = findNext(edges, numEdges, v, w);
+		int edgeCount = findNext(edges, numEdges, numVert, v, w);
 
 		for(int i = 0; i < edgeCount; i++)
 		{
@@ -253,6 +290,20 @@ __global__ void betweennessCentrality(int numVert, int numEdges, int *edges, lin
 		
 }
 
+int edgeCompare(const void* a, const void* b)
+{
+	int* av1 = (int*)a;
+	int* av2 = av1 + 1;
+	int* bv1 = (int*)b;
+	int* bv2 = bv1 + 1;
+
+	if(*av1 < *bv1) return -1;
+	else if(*av1 > *bv1) return 1;
+	else if(*av2 < *bv2) return -1;
+	else if(*av2 > *bv2) return 1;
+	else return 0;
+}
+
 int main(int argc, char* argv[])
 {
 	int elements = DEFAULT_ELE;
@@ -261,6 +312,7 @@ int main(int argc, char* argv[])
 	int *d_mem;
 	int *h_edge;
 	int *d_edge;
+	int *d_optEdge;
 	linkNode* pList;
 	float *d_bc;
 	float *h_bc;
@@ -332,17 +384,38 @@ int main(int argc, char* argv[])
 			}
 		}
 	}
+
+	//Sort the arrays for CSR
+	qsort(h_edge, numEdge, sizeof(int) * 2, edgeCompare);
+	
+	long totalMem = 0;
+	cudaMalloc((void**)&d_optEdge, sizeof(int) * (numVert + 1) * (numEdge * 2));
+	totalMem += sizeof(int) * (numVert + 1) * (numEdge * 2);
+
+
 	struct timeval totalStart, totalEnd;
 	gettimeofday(&totalStart, NULL);
 
-	long totalMem = 0;
+	//First convert edges
+	cudaMalloc((void**)&d_edge, sizeof(int) * numEdge * 2);
+	//totalMem += sizeof(int) * numEdge * 2;
+	cudaMemcpy(d_edge, h_edge, sizeof(int) * numEdge * 2, cudaMemcpyHostToDevice);
+	convertEdges<<<1,1>>>(d_edge, numEdge, numVert, d_optEdge);
+	cudaDeviceSynchronize();
+	cudaFree(d_edge);
+
+	//Test code
+	int* test = (int*)malloc(sizeof(int) * (numVert + 1) * (numEdge * 2));
+	cudaMemcpy(test, d_optEdge, sizeof(int) * (numVert + 1) * (numEdge * 2), cudaMemcpyDeviceToHost);
+	int* val = test;
+	int* col = test + numEdge;
+	int* row = col + numEdge;
+	
+
 	h_bc = (float*)malloc(sizeof(float) * numVert);
 	cudaMalloc((void**)&d_mem, sizeof(int) * numVert);
 	totalMem += sizeof(int) * numVert;
 	
-	cudaMalloc((void**)&d_edge, sizeof(int) * numEdge * 2);
-	totalMem += sizeof(int) * numEdge * 2;
-
 	cudaMalloc((void**)&d_bc, sizeof(float) * numVert);
 	totalMem += sizeof(float) * numVert;
 
@@ -354,8 +427,6 @@ int main(int argc, char* argv[])
 
 	cudaMalloc((void**)&d_dep, sizeof(float) * numVert * numVert);
 	totalMem += sizeof(float) * numVert * numVert;
-
-	cudaMemcpy(d_edge, h_edge, sizeof(int) * numEdge * 2, cudaMemcpyHostToDevice);
 	
 	dim3 block(BLOCK_WIDTH, BLOCK_HEIGHT);
 	int gridSize = numVert;//ceil(numVert / (float)(BLOCK_WIDTH * BLOCK_HEIGHT));
@@ -364,7 +435,7 @@ int main(int argc, char* argv[])
 	struct timeval start, end;
 
 	gettimeofday(&start, NULL);
-	betweennessCentrality<<<grid,block, 512>>>(numVert, numEdge, d_edge, pList, d_bc, d_glob, d_dep);
+	betweennessCentrality<<<grid,block, 512>>>(numVert, numEdge, d_optEdge, pList, d_bc, d_glob, d_dep);
 	cudaDeviceSynchronize();
 	gettimeofday(&end, NULL);
 	long elapsed = (end.tv_sec * 1000000 + end.tv_usec) - (start.tv_sec * 1000000 + start.tv_usec);
