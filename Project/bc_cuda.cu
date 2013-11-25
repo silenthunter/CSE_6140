@@ -19,8 +19,8 @@ typedef struct __align__(8) linkNode
 __global__ void convertEdges(int* edges, int numEdge, int numVert, int* newArrays)
 {
 	int* val = newArrays;
-	int* col = val + numEdge;
-	int* row = col + numEdge;
+	int* col = &val[numEdge];// + numEdge;
+	int* row = &col[numEdge];
 
 	int lastRow = -1;
 	int rowNum = 0;
@@ -34,6 +34,10 @@ __global__ void convertEdges(int* edges, int numEdge, int numVert, int* newArray
 
 		if(lastRow != v1)
 		{
+			//Make sure to skip unconnected vertices
+			int diff = v1 - lastRow;
+			for(int j = 0; j < diff - 1; j++)
+				row[rowNum++] = i;
 			row[rowNum++] = i;
 			lastRow = v1;
 		}
@@ -47,8 +51,8 @@ __global__ void convertEdges(int* edges, int numEdge, int numVert, int* newArray
 __device__ int findNext(int* edges, int numEdge, int numVert, int v, int* destination)
 {
 	int* val = edges;
-	int* col = val + numEdge;
-	int* row = col + numEdge;
+	int* col = &val[numEdge];
+	int* row = &col[numEdge];
 
 	int idx = row[v];
 	int nextIdx = row[v + 1];
