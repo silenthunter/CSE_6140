@@ -19,8 +19,8 @@ typedef struct __align__(8) linkNode
 __global__ void convertEdges(int* edges, int numEdge, int numVert, int* newArrays)
 {
 	int* val = newArrays;
-	int* col = val + numVert;
-	int* row = col + numVert;
+	int* col = val + numEdge;
+	int* row = col + numEdge;
 
 	int lastRow = -1;
 	int rowNum = 0;
@@ -41,20 +41,20 @@ __global__ void convertEdges(int* edges, int numEdge, int numVert, int* newArray
 
 	//Fill in final row columns
 	for(int i = rowNum; i <= numVert; i++)
-		row[i] = numVert;
+		row[i] = numEdge;
 }
 
 __device__ int findNext(int* edges, int numEdge, int numVert, int v, int* destination)
 {
 	int* val = edges;
-	int* col = val + numVert;
-	int* row = col + numVert;
+	int* col = val + numEdge;
+	int* row = col + numEdge;
 
 	int idx = row[v];
 	int nextIdx = row[v + 1];
 
 	int count = 0;
-	for(int i = idx; i < nextIdx && i < numEdge; i++)
+	for(int i = idx; i < nextIdx; i++)
 	{
 		destination[count++] = col[i];
 	}
@@ -246,10 +246,10 @@ int edgeCompare(const void* a, const void* b)
 	int* bv1 = (int*)b;
 	int* bv2 = bv1 + 1;
 
-	if(av1 < bv1) return -1;
-	else if(av1 > bv1) return 1;
-	else if(av2 < bv2) return -1;
-	else if(av2 > bv2) return 1;
+	if(*av1 < *bv1) return -1;
+	else if(*av1 > *bv1) return 1;
+	else if(*av2 < *bv2) return -1;
+	else if(*av2 > *bv2) return 1;
 	else return 0;
 }
 
@@ -337,27 +337,28 @@ int main(int argc, char* argv[])
 	//Sort the arrays for CSR
 	qsort(h_edge, numEdge, sizeof(int) * 2, edgeCompare);
 	
-	cudaMalloc((void**)&d_optEdge, sizeof(int) * (numVert * 3 + 1));
+	long totalMem = 0;
+	cudaMalloc((void**)&d_optEdge, sizeof(int) * (numVert + 1) * (numEdge * 2));
+	totalMem += sizeof(int) * (numVert + 1) * (numEdge * 2);
 
 
 	struct timeval totalStart, totalEnd;
 	gettimeofday(&totalStart, NULL);
 
-	long totalMem = 0;
 	//First convert edges
 	cudaMalloc((void**)&d_edge, sizeof(int) * numEdge * 2);
-	totalMem += sizeof(int) * numEdge * 2;
+	//totalMem += sizeof(int) * numEdge * 2;
 	cudaMemcpy(d_edge, h_edge, sizeof(int) * numEdge * 2, cudaMemcpyHostToDevice);
 	convertEdges<<<1,1>>>(d_edge, numEdge, numVert, d_optEdge);
 	cudaDeviceSynchronize();
 	cudaFree(d_edge);
 
 	//Test code
-	int* test = (int*)malloc(sizeof(int) * (numVert * 3 + 1));
-	cudaMemcpy(test, d_optEdge, sizeof(int) * (numVert * 3 + 1), cudaMemcpyDeviceToHost);
+	int* test = (int*)malloc(sizeof(int) * (numVert + 1) * (numEdge * 2));
+	cudaMemcpy(test, d_optEdge, sizeof(int) * (numVert + 1) * (numEdge * 2), cudaMemcpyDeviceToHost);
 	int* val = test;
-	int* col = test + numVert;
-	int* row = col + numVert;
+	int* col = test + numEdge;
+	int* row = col + numEdge;
 	
 
 	h_bc = (float*)malloc(sizeof(float) * numVert);
