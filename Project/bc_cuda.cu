@@ -5,8 +5,8 @@
 
 using namespace std;
 
-const int BLOCK_WIDTH = 1;
-const int BLOCK_HEIGHT = 1;
+const int BLOCK_WIDTH = 2;
+const int BLOCK_HEIGHT = 2;
 const int DEFAULT_ELE = 16;
 extern __shared__ int shmem[];
 
@@ -280,7 +280,6 @@ __global__ void betweennessCentrality(int numVert, int numEdges, int *edges, lin
 
 	if(block_idx >= numVert) return;
 
-	BC[block_idx] = 0.0f;
 	shmem[0] = 0;
 
 	__syncthreads();
@@ -417,6 +416,7 @@ int main(int argc, char* argv[])
 	totalMem += sizeof(int) * numVert;
 	
 	cudaMalloc((void**)&d_bc, sizeof(float) * numVert);
+	cudaMemset(d_bc, 0, sizeof(float) * numVert);
 	totalMem += sizeof(float) * numVert;
 
 	cudaMalloc((void**)&d_glob, sizeof(int) * numVert * (numVert * 5));
