@@ -5,8 +5,8 @@
 
 using namespace std;
 
-const int BLOCK_WIDTH = 2;
-const int BLOCK_HEIGHT = 2;
+const int BLOCK_WIDTH = 16;
+const int BLOCK_HEIGHT = 16;
 const int DEFAULT_ELE = 16;
 extern __shared__ int shmem[];
 
@@ -49,7 +49,7 @@ __global__ void convertEdges(int* edges, int numEdge, int numVert, int* newArray
 		row[i] = numEdge;
 }
 
-__device__ int findNext(int* edges, int numEdge, int numVert, int v, int* destination)
+__device__ int findNext(int* __restrict__ edges, int numEdge, int numVert, int v, int* destination)
 {
 	int* val = edges;
 	int* col = &val[numEdge];
@@ -112,7 +112,7 @@ __device__ int PATH_SIZE;
 __device__ int D_SIZE;
 __device__ int Q_SIZE;
 
-__device__ void doAlg(int numVert, int* edges, int numEdges, linkNode* pList, float* BC, int* glob, float* globDep)
+__device__ void doAlg(int numVert, int* __restrict__ edges, int numEdges, linkNode* pList, float* BC, int* glob, float* globDep)
 {
 	S_SIZE = numVert;
 	P_SIZE = numEdges + numVert;
@@ -176,9 +176,6 @@ __device__ void doAlg(int numVert, int* edges, int numEdges, linkNode* pList, fl
 		*nextFront = 0;
 	}
 
-	int* testCnt = &shmem[5];
-	*testCnt = 0;
-
 	while(*Q_head != *Q_tail || *front != 0 || *nextFront != 0)
 	{
 		__syncthreads();
@@ -213,15 +210,12 @@ __device__ void doAlg(int numVert, int* edges, int numEdges, linkNode* pList, fl
 			if(d[wNode] == d[v] + 1)
 			{
 				atomicAdd(&pathCount[wNode], pathCount[v]);
-				//pathCount[wNode] = pathCount[wNode] + pathCount[v];
 				
 				//Append v to the PrevNode list
-
 				//Find the next empty slot. Start after the initial lookup indices
 				if(atomicCAS(&P[wNode].edge, -1, v) < 0);
 				else
 				{
-					atomicAdd(testCnt, 1);
 					int empty;
 					int casToken = 0;
 					for(empty = numVert; casToken != -1; empty++)
@@ -273,7 +267,7 @@ __device__ void doAlg(int numVert, int* edges, int numEdges, linkNode* pList, fl
 	
 }
 
-__global__ void betweennessCentrality(int numVert, int numEdges, int *edges, linkNode* pList, float* BC, int* glob, float* dep)
+__global__ void betweennessCentrality(int numVert, int numEdges, int* __restrict__ edges, linkNode* pList, float* BC, int* glob, float* dep)
 {
 	//sortEdges(edges, path);
 	int block_idx = blockIdx.x + blockIdx.y * gridDim.x;
