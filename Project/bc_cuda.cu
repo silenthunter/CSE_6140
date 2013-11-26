@@ -220,13 +220,13 @@ __device__ void doAlg(int numVert, int* __restrict__ edges, int numEdges, linkNo
 					int casToken = 0;
 					for(empty = numVert; casToken != -1; empty++)
 					{
-						casToken = atomicCAS(&P[empty].edge, -1, v);
+						if(P[empty].edge == -1)
+							casToken = atomicCAS(&P[empty].edge, -1, v);
 					}
 					empty--;
 
 					linkNode* j = &P[wNode];
-					//while(j !=  NULL)
-					while(atomicCAS(&(j->next), -1, empty) >= 0)
+					while(j->next != -1 || atomicCAS(&(j->next), -1, empty) >= 0)
 					{
 						j = &P[j->next];
 					}
