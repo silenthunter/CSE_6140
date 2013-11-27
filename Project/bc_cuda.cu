@@ -5,9 +5,10 @@
 
 using namespace std;
 
-const int BLOCK_WIDTH = 16;
-const int BLOCK_HEIGHT = 16;
+const int BLOCK_WIDTH = 2;
+const int BLOCK_HEIGHT = 2;
 const int DEFAULT_ELE = 16;
+const int MAX_VERTS_PAR = 32;
 extern __shared__ int shmem[];
 
 typedef struct __align__(8) linkNode
@@ -112,7 +113,7 @@ __device__ int PATH_SIZE;
 __device__ int D_SIZE;
 __device__ int Q_SIZE;
 
-__device__ void doAlg(int numVert, int* __restrict__ edges, int numEdges, linkNode* pList, float* BC, int* glob, float* globDep)
+__device__ void doAlg(int block_idx, int localIdx, int numVert, int* __restrict__ edges, int numEdges, linkNode* pList, float* BC, int* glob, float* globDep)
 {
 	S_SIZE = numVert;
 	P_SIZE = numEdges + numVert;
@@ -121,17 +122,16 @@ __device__ void doAlg(int numVert, int* __restrict__ edges, int numEdges, linkNo
 	PATH_SIZE = numVert;
 	ELEMENTS = numVert;
 
-	int block_idx = gridDim.x * blockIdx.y + blockIdx.x;
-	int localIdx = threadIdx.x + threadIdx.y * blockDim.x;
-
-	unsigned int PTR_OFFSET = block_idx * (S_SIZE + D_SIZE + Q_SIZE + PATH_SIZE);
+	//unsigned int PTR_OFFSET = (block_idx % MAX_VERTS_PAR) * (S_SIZE + D_SIZE + Q_SIZE + PATH_SIZE);
+	unsigned int PTR_OFFSET = (block_idx) * (S_SIZE + D_SIZE + Q_SIZE + PATH_SIZE);
 	
 	int* S = &glob[PTR_OFFSET];
 	int* S_head = &shmem[4];
 	*S_head = 0;
 	PTR_OFFSET += S_SIZE;
 	
-	linkNode* P = &pList[block_idx * P_SIZE];
+	//linkNode* P = &pList[(block_idx % MAX_VERTS_PAR) * P_SIZE];
+	linkNode* P = &pList[(block_idx) * P_SIZE];
 	//Blank the previous items
 	for(int i = 0; i < P_SIZE && localIdx == 0; i++)
 	{
@@ -168,13 +168,15 @@ __device__ void doAlg(int numVert, int* __restrict__ edges, int numEdges, linkNo
 	if(localIdx == 0)
 		pushQueue(block_idx, Q, Q_SIZE, Q_head, Q_tail);
 
-	int* front = &shmem[0];
-	int* nextFront = &shmem[1];
+	int* volatile front = &shmem[0];
+	int* volatile nextFront = &shmem[1];
 	if(localIdx == 0)
 	{
 		*front = 1;
 		*nextFront = 0;
 	}
+
+	__syncthreads();
 
 	while(*Q_head != *Q_tail || *front != 0 || *nextFront != 0)
 	{
@@ -238,7 +240,8 @@ __device__ void doAlg(int numVert, int* __restrict__ edges, int numEdges, linkNo
 
 	}
 	
-	float* dep = &globDep[block_idx * numVert];
+	//float* dep = &globDep[(block_idx % MAX_VERTS_PAR) * numVert];
+	float* dep = &globDep[(block_idx) * numVert];
 
 	__syncthreads();
 	
@@ -270,15 +273,17 @@ __device__ void doAlg(int numVert, int* __restrict__ edges, int numEdges, linkNo
 __global__ void betweennessCentrality(int numVert, int numEdges, int* __restrict__ edges, linkNode* pList, float* BC, int* glob, float* dep)
 {
 	//sortEdges(edges, path);
-	int block_idx = blockIdx.x + blockIdx.y * gridDim.x;
-
-	if(block_idx >= numVert) return;
-
-	shmem[0] = 0;
+	int block_idx = gridDim.x * blockIdx.y + blockIdx.x;
+	int localIdx = threadIdx.x + threadIdx.y * blockDim.x;
 
 	__syncthreads();
-
-	doAlg(numVert, edges, numEdges, pList, BC, glob, dep);
+	int runs = ceilf((float)numVert / MAX_VERTS_PAR);
+	for(int i = 0; i < runs; i++)
+	{
+		if(block_idx + (MAX_VERTS_PAR * i) >= numVert) return;
+		doAlg(block_idx + (MAX_VERTS_PAR * i), localIdx, numVert, edges, numEdges, pList, BC, glob, dep);
+		__syncthreads();
+	}
 
 		
 }
@@ -397,14 +402,6 @@ int main(int argc, char* argv[])
 	cudaDeviceSynchronize();
 	cudaFree(d_edge);
 
-	//Test code
-	int* test = (int*)malloc(sizeof(int) * (numVert + 1) * (numEdge * 2));
-	cudaMemcpy(test, d_optEdge, sizeof(int) * (numVert + 1) * (numEdge * 2), cudaMemcpyDeviceToHost);
-	int* val = test;
-	int* col = test + numEdge;
-	int* row = col + numEdge;
-	
-
 	h_bc = (float*)malloc(sizeof(float) * numVert);
 	cudaMalloc((void**)&d_mem, sizeof(int) * numVert);
 	totalMem += sizeof(int) * numVert;
@@ -413,17 +410,17 @@ int main(int argc, char* argv[])
 	cudaMemset(d_bc, 0, sizeof(float) * numVert);
 	totalMem += sizeof(float) * numVert;
 
-	cudaMalloc((void**)&d_glob, sizeof(int) * numVert * (numVert * 5));
-	totalMem += sizeof(int) * numVert * ((numVert * 5));
+	cudaMalloc((void**)&d_glob, sizeof(int) * max(numVert, MAX_VERTS_PAR) * (numVert * 5));
+	totalMem += sizeof(int) * min(numVert, MAX_VERTS_PAR) * ((numVert * 5));
 
-	cudaMalloc((void**)&pList, sizeof(linkNode) * numVert * (numVert + numEdge));
-	totalMem += sizeof(linkNode) * numVert * (numVert + numEdge);
+	cudaMalloc((void**)&pList, sizeof(linkNode) * max(numVert, MAX_VERTS_PAR) * (numVert + numEdge));
+	totalMem += sizeof(linkNode) * min(numVert, MAX_VERTS_PAR) * (numVert + numEdge);
 
-	cudaMalloc((void**)&d_dep, sizeof(float) * numVert * numVert);
-	totalMem += sizeof(float) * numVert * numVert;
+	cudaMalloc((void**)&d_dep, sizeof(float) * max(numVert, MAX_VERTS_PAR) * numVert);
+	totalMem += sizeof(float) * min(numVert,MAX_VERTS_PAR) * numVert;
 	
 	dim3 block(BLOCK_WIDTH, BLOCK_HEIGHT);
-	int gridSize = numVert;//ceil(numVert / (float)(BLOCK_WIDTH * BLOCK_HEIGHT));
+	int gridSize = min(numVert, MAX_VERTS_PAR);//ceil(numVert / (float)(BLOCK_WIDTH * BLOCK_HEIGHT));
 	dim3 grid(gridSize);
 
 	struct timeval start, end;
@@ -436,8 +433,8 @@ int main(int argc, char* argv[])
 
 	cudaError_t error = cudaGetLastError();
 	
-	int* h_mem = (int*)malloc(sizeof(int) * numVert);
-	cudaMemcpy(h_mem, d_mem, sizeof(int) * numVert, cudaMemcpyDeviceToHost);
+	//nt* h_mem = (int*)malloc(sizeof(int) * numVert);
+	//cudaMemcpy(h_mem, d_mem, sizeof(int) * numVert, cudaMemcpyDeviceToHost);
 	cudaMemcpy(h_bc, d_bc, sizeof(float) * numVert, cudaMemcpyDeviceToHost);
 
 	gettimeofday(&totalEnd, NULL);
