@@ -122,16 +122,14 @@ __device__ void doAlg(int block_idx, int localIdx, int numVert, int* __restrict_
 	PATH_SIZE = numVert;
 	ELEMENTS = numVert;
 
-	//unsigned int PTR_OFFSET = (block_idx % MAX_VERTS_PAR) * (S_SIZE + D_SIZE + Q_SIZE + PATH_SIZE);
-	unsigned int PTR_OFFSET = (block_idx) * (S_SIZE + D_SIZE + Q_SIZE + PATH_SIZE);
+	unsigned int PTR_OFFSET = (block_idx % MAX_VERTS_PAR) * (S_SIZE + D_SIZE + Q_SIZE + PATH_SIZE);
 	
 	int* S = &glob[PTR_OFFSET];
 	int* S_head = &shmem[4];
 	*S_head = 0;
 	PTR_OFFSET += S_SIZE;
 	
-	//linkNode* P = &pList[(block_idx % MAX_VERTS_PAR) * P_SIZE];
-	linkNode* P = &pList[(block_idx) * P_SIZE];
+	linkNode* P = &pList[(block_idx % MAX_VERTS_PAR) * P_SIZE];
 	//Blank the previous items
 	for(int i = 0; i < P_SIZE && localIdx == 0; i++)
 	{
@@ -240,8 +238,8 @@ __device__ void doAlg(int block_idx, int localIdx, int numVert, int* __restrict_
 
 	}
 	
-	//float* dep = &globDep[(block_idx % MAX_VERTS_PAR) * numVert];
-	float* dep = &globDep[(block_idx) * numVert];
+	float* dep = &globDep[(block_idx % MAX_VERTS_PAR) * numVert];
+	for(int i = 0; i < numVert; i++ && localIdx == 0) dep[i] = 0;
 
 	__syncthreads();
 	
@@ -410,13 +408,13 @@ int main(int argc, char* argv[])
 	cudaMemset(d_bc, 0, sizeof(float) * numVert);
 	totalMem += sizeof(float) * numVert;
 
-	cudaMalloc((void**)&d_glob, sizeof(int) * max(numVert, MAX_VERTS_PAR) * (numVert * 5));
+	cudaMalloc((void**)&d_glob, sizeof(int) * min(numVert, MAX_VERTS_PAR) * (numVert * 5));
 	totalMem += sizeof(int) * min(numVert, MAX_VERTS_PAR) * ((numVert * 5));
 
-	cudaMalloc((void**)&pList, sizeof(linkNode) * max(numVert, MAX_VERTS_PAR) * (numVert + numEdge));
+	cudaMalloc((void**)&pList, sizeof(linkNode) * min(numVert, MAX_VERTS_PAR) * (numVert + numEdge));
 	totalMem += sizeof(linkNode) * min(numVert, MAX_VERTS_PAR) * (numVert + numEdge);
 
-	cudaMalloc((void**)&d_dep, sizeof(float) * max(numVert, MAX_VERTS_PAR) * numVert);
+	cudaMalloc((void**)&d_dep, sizeof(float) * min(numVert, MAX_VERTS_PAR) * numVert);
 	totalMem += sizeof(float) * min(numVert,MAX_VERTS_PAR) * numVert;
 	
 	dim3 block(BLOCK_WIDTH, BLOCK_HEIGHT);
