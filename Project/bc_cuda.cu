@@ -5,10 +5,10 @@
 
 using namespace std;
 
-const int BLOCK_WIDTH = 2;
-const int BLOCK_HEIGHT = 2;
+const int BLOCK_WIDTH = 16;
+const int BLOCK_HEIGHT = 32;
 const int DEFAULT_ELE = 16;
-const int MAX_VERTS_PAR = 32;
+const int MAX_VERTS_PAR = 512;
 extern __shared__ int shmem[];
 
 typedef struct __align__(8) linkNode
@@ -176,10 +176,12 @@ __device__ void doAlg(int block_idx, int localIdx, int numVert, int* __restrict_
 
 	__syncthreads();
 
-	while(*Q_head != *Q_tail || *front != 0 || *nextFront != 0)
+	//while(*Q_head != *Q_tail || *front > 0 || *nextFront != 0)
+	while(1)
 	{
 		__syncthreads();
-		if(*front == 0 && localIdx == 0)
+		if(!(*Q_head != *Q_tail || *front > 0 || *nextFront != 0))break;
+		if(*front <= 0 && localIdx == 0)
 		{
 			*front = *nextFront;
 			*nextFront = 0;
