@@ -8,7 +8,7 @@ using namespace std;
 const int BLOCK_WIDTH = 16;
 const int BLOCK_HEIGHT = 32;
 const int DEFAULT_ELE = 16;
-const int MAX_VERTS_PAR = 512;
+const int MAX_VERTS_PAR = 1024;
 extern __shared__ int shmem[];
 
 typedef struct __align__(8) linkNode
@@ -70,18 +70,20 @@ __device__ int findNext(int* __restrict__ edges, int numEdge, int numVert, int v
 
 __device__ void pushQueue(int element, int* queue, int queueSize, unsigned int* head, unsigned int* tail)
 {
-	int idx = atomicInc(tail, queueSize);
+	int idx = atomicInc(tail, queueSize - 1);
 	queue[idx] = element;
 }
 
-__device__ int popQueue(int* queue, int queueSize, unsigned int* head, unsigned int* tail)
+__device__ int popQueue(int* queue, int queueSize, unsigned int* head, unsigned int* tail, int localIdx)
 {
 	int retn;
-	if(*head == *tail) retn = -1;
+	int diff = *tail > *head ? *tail - *head : *tail + queueSize - *head;
+	if(*head == *tail || diff <= localIdx) retn = -1;
 	else
 	{
-		int idx = atomicInc(head, queueSize);
-		retn = queue[idx];
+		//int idx = atomicInc(head, queueSize);
+		//retn = queue[idx];
+		retn = queue[*head + localIdx];
 	}
 	
 	return retn;
@@ -123,6 +125,8 @@ __device__ void doAlg(int block_idx, int localIdx, int numVert, int* __restrict_
 	ELEMENTS = numVert;
 
 	unsigned int PTR_OFFSET = (block_idx % MAX_VERTS_PAR) * (S_SIZE + D_SIZE + Q_SIZE + PATH_SIZE);
+
+	const int blockSize = blockDim.x * blockDim.y;
 	
 	int* S = &glob[PTR_OFFSET];
 	int* S_head = &shmem[4];
@@ -176,7 +180,6 @@ __device__ void doAlg(int block_idx, int localIdx, int numVert, int* __restrict_
 
 	__syncthreads();
 
-	//while(*Q_head != *Q_tail || *front > 0 || *nextFront != 0)
 	while(1)
 	{
 		__syncthreads();
@@ -188,12 +191,17 @@ __device__ void doAlg(int block_idx, int localIdx, int numVert, int* __restrict_
 		}
 		__syncthreads();
 		int v = -1;
-		int atmSub = atomicSub(front, 1);
-		if(atmSub > 0)
-			v = popQueue(Q, Q_SIZE, Q_head, Q_tail);
-		else
-			atomicAdd(front, 1);//Don't let the counter go below 0
+		//int atmSub = atomicSub(front, 1);
+		if(*front > localIdx)
+			v = popQueue(Q, Q_SIZE, Q_head, Q_tail, localIdx);
+			//atomicAdd(front, 1);//Don't let the counter go below 0
 		if(v < 0) continue;
+		if(localIdx == 0)
+		{
+			*Q_head = (*Q_head + ((*front < blockSize) ? *front : blockSize)) % Q_SIZE;
+			*front -= *front < blockSize ? *front : blockSize;
+		}
+		__threadfence();
 
 		pushStack(v, S, S_head);
 
