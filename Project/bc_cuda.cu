@@ -5,8 +5,11 @@
 
 using namespace std;
 
-const int BLOCK_WIDTH = 16;
-const int BLOCK_HEIGHT = 32;
+//Video card constant
+const int WARP_SIZE = 32;
+
+const int BLOCK_WIDTH = 4;
+const int BLOCK_HEIGHT = 8;
 const int DEFAULT_ELE = 16;
 const int MAX_VERTS_PAR = 1024;
 extern __shared__ int shmem[];
@@ -182,24 +185,25 @@ __device__ void doAlg(int block_idx, int localIdx, int numVert, int* __restrict_
 
 	while(1)
 	{
-		__syncthreads();
+		__threadfence();
 		if(!(*Q_head != *Q_tail || *front > 0 || *nextFront != 0))break;
 		if(*front <= 0 && localIdx == 0)
 		{
 			*front = *nextFront;
 			*nextFront = 0;
 		}
-		__syncthreads();
+		__threadfence();
 		int v = -1;
-		//int atmSub = atomicSub(front, 1);
 		if(*front > localIdx)
 			v = popQueue(Q, Q_SIZE, Q_head, Q_tail, localIdx);
-			//atomicAdd(front, 1);//Don't let the counter go below 0
 		if(v < 0) continue;
-		if(localIdx == 0)
+
+		//The first thread in a warp?
+		if((localIdx & (WARP_SIZE - 1)) == 0)
 		{
-			*Q_head = (*Q_head + ((*front < blockSize) ? *front : blockSize)) % Q_SIZE;
-			*front -= *front < blockSize ? *front : blockSize;
+			atomicAdd(Q_head, ((*front < WARP_SIZE) ? *front : WARP_SIZE));
+			if(*Q_head >= (unsigned int)Q_SIZE) atomicSub(Q_head, (unsigned int)Q_SIZE);
+			atomicSub(front, *front < WARP_SIZE ? *front : WARP_SIZE);
 		}
 		__threadfence();
 
