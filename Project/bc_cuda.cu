@@ -181,6 +181,10 @@ __device__ void doAlg(int block_idx, int localIdx, int numVert, int* __restrict_
 		*nextFront = 0;
 	}
 
+	int* nextEmpty = &shmem[6];
+	if(localIdx == 0)
+		*nextEmpty = numVert;
+
 	__syncthreads();
 
 	while(1)
@@ -230,14 +234,8 @@ __device__ void doAlg(int block_idx, int localIdx, int numVert, int* __restrict_
 				if(atomicCAS(&P[wNode].edge, -1, v) < 0);
 				else
 				{
-					int empty;
-					int casToken = 0;
-					for(empty = numVert; casToken != -1; empty++)
-					{
-						if(P[empty].edge == -1)
-							casToken = atomicCAS(&P[empty].edge, -1, v);
-					}
-					empty--;
+					int empty = atomicAdd(nextEmpty, 1);
+					P[empty].edge = v;
 
 					linkNode* j = &P[wNode];
 					while(j->next != -1 || atomicCAS(&(j->next), -1, empty) >= 0)
