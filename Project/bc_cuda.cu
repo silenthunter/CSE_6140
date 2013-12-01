@@ -135,27 +135,27 @@ __device__ void doAlg(int block_idx, int localIdx, int numVert, int* __restrict_
 	int* S_head = &shmem[4];
 	*S_head = 0;
 	PTR_OFFSET += S_SIZE;
-	
+
 	linkNode* P = &pList[(block_idx % MAX_VERTS_PAR) * P_SIZE];
 	//Blank the previous items
-	for(int i = 0; i < P_SIZE && localIdx == 0; i++)
+	for(int i = 0; localIdx + i * blockSize < P_SIZE; i++)
 	{
-		P[i].edge = -1;
-		P[i].next = -1;
+		P[localIdx + i * blockSize].edge = -1;
+		P[localIdx + i * blockSize].next = -1;
 	}
 
 	int* pathCount = &glob[PTR_OFFSET];
-	for(int i = 0; i < PATH_SIZE; i++)
+	for(int i = 0; localIdx + i * blockSize < PATH_SIZE; i++)
 	{
-		pathCount[i] = 0;
+		pathCount[localIdx + i * blockSize] = 0;
 	}
 	pathCount[block_idx] = 1;
 	PTR_OFFSET += PATH_SIZE;
 
 	int* d = &glob[PTR_OFFSET];
-	for(int i = 0; i < D_SIZE; i++)
+	for(int i = 0; localIdx + i * blockSize < D_SIZE; i++)
 	{
-		d[i] = -1;
+		d[localIdx + i * blockSize] = -1;
 	}
 	d[block_idx] = 0;
 	PTR_OFFSET += D_SIZE;
@@ -181,9 +181,16 @@ __device__ void doAlg(int block_idx, int localIdx, int numVert, int* __restrict_
 		*nextFront = 0;
 	}
 
-	int* nextEmpty = &shmem[6];
+	int* nextEmpty = &shmem[5];
+	int* volatile levelCount = &shmem[14];
+	int* levelArray = &shmem[15];
 	if(localIdx == 0)
+	{
 		*nextEmpty = numVert;
+		*levelCount = 1;
+		levelArray[0] = 0;
+	}
+
 
 	__syncthreads();
 
@@ -195,6 +202,7 @@ __device__ void doAlg(int block_idx, int localIdx, int numVert, int* __restrict_
 		{
 			*front = *nextFront;
 			*nextFront = 0;
+			levelArray[(*levelCount)++] = *S_head;
 		}
 		__threadfence();
 		int v = -1;
@@ -253,10 +261,16 @@ __device__ void doAlg(int block_idx, int localIdx, int numVert, int* __restrict_
 	float* dep = &globDep[(block_idx % MAX_VERTS_PAR) * numVert];
 	for(int i = 0; i < numVert; i++ && localIdx == 0) dep[i] = 0;
 
+	if(localIdx == 0) (*levelCount)--;
 	__syncthreads();
 	
-	while(*S_head > 0 && localIdx == 0)
+	while(*S_head > 0)
 	{
+		int diff = *S_head - levelArray[*levelCount];
+		if(diff <= 0 && localIdx == 0)
+			(*levelCount)--;
+
+		if(localIdx >= diff) continue;
 		int w = popStack(S, S_head);
 		if(w == block_idx) continue;
 		
@@ -267,7 +281,7 @@ __device__ void doAlg(int block_idx, int localIdx, int numVert, int* __restrict_
 			int v = node->edge;
 			if(v < 0) continue;
 
-			dep[v] = dep[v] + ((float)pathCount[v]/(float)pathCount[w]) * (1 + dep[w]);
+			atomicAdd(&dep[v], ((float)pathCount[v]/(float)pathCount[w]) * (1 + dep[w]));
 
 			node = node->next < 0 ? NULL : &P[node->next];
 		}
@@ -436,7 +450,7 @@ int main(int argc, char* argv[])
 	struct timeval start, end;
 
 	gettimeofday(&start, NULL);
-	betweennessCentrality<<<grid,block, 512>>>(numVert, numEdge, d_optEdge, pList, d_bc, d_glob, d_dep);
+	betweennessCentrality<<<grid,block, 10000>>>(numVert, numEdge, d_optEdge, pList, d_bc, d_glob, d_dep);
 	cudaDeviceSynchronize();
 	gettimeofday(&end, NULL);
 	long elapsed = (end.tv_sec * 1000000 + end.tv_usec) - (start.tv_sec * 1000000 + start.tv_usec);
