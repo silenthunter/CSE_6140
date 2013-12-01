@@ -11,7 +11,7 @@ const int WARP_SIZE = 32;
 const int BLOCK_WIDTH = 4;
 const int BLOCK_HEIGHT = 8;
 const int DEFAULT_ELE = 16;
-const int MAX_VERTS_PAR = 1024;
+const int MAX_VERTS_PAR = 2048;
 extern __shared__ int shmem[];
 
 typedef struct __align__(8) linkNode
@@ -259,7 +259,7 @@ __device__ void doAlg(int block_idx, int localIdx, int numVert, int* __restrict_
 	}
 	
 	float* dep = &globDep[(block_idx % MAX_VERTS_PAR) * numVert];
-	for(int i = 0; i < numVert; i++ && localIdx == 0) dep[i] = 0;
+	for(int i = 0; localIdx + i * blockSize < numVert; i++) dep[localIdx + i * blockSize] = 0;
 
 	if(localIdx == 0) (*levelCount)--;
 	__syncthreads();
@@ -411,8 +411,8 @@ int main(int argc, char* argv[])
 	qsort(h_edge, numEdge, sizeof(int) * 2, edgeCompare);
 	
 	long totalMem = 0;
-	cudaMalloc((void**)&d_optEdge, sizeof(int) * (numVert + 1) * (numEdge * 2));
-	totalMem += sizeof(int) * (numVert + 1) * (numEdge * 2);
+	cudaMalloc((void**)&d_optEdge, sizeof(int) * ((numVert + 1) + (numEdge * 2)));
+	totalMem += sizeof(int) * ((numVert + 1) + (numEdge * 2));
 
 
 	struct timeval totalStart, totalEnd;
