@@ -8,10 +8,10 @@ using namespace std;
 //Video card constant
 const int WARP_SIZE = 32;
 
-const int BLOCK_WIDTH = 4;
+const int BLOCK_WIDTH = 8;
 const int BLOCK_HEIGHT = 8;
 const int DEFAULT_ELE = 16;
-const int MAX_VERTS_PAR = 2048;
+const int MAX_VERTS_PAR = 256;
 extern __shared__ int shmem[];
 
 typedef struct __align__(8) linkNode
