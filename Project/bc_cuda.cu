@@ -5,108 +5,54 @@
 
 using namespace std;
 
-//Video card constant
-const int WARP_SIZE = 32;
-
-const int BLOCK_WIDTH = 8;
-const int BLOCK_HEIGHT = 8;
+const int BLOCK_WIDTH = 16;
+const int BLOCK_HEIGHT = 16;
 const int DEFAULT_ELE = 16;
-const int MAX_VERTS_PAR = 256;
-extern __shared__ int shmem[];
 
 typedef struct __align__(8) linkNode
 {
 	int edge;
-	int next;
+	linkNode* next;
 } linkNode;
 
-//Create CSR edge storage
-__global__ void convertEdges(int* edges, int numEdge, int numVert, int* newArrays)
+//HACK: This will be incredibly slow  on CUDA!
+__device__ int findNext(int* edges, int numEdge, int v, int* destination)
 {
-	int* val = newArrays;
-	int* col = &val[numEdge];// + numEdge;
-	int* row = &col[numEdge];
-
-	int lastRow = -1;
-	int rowNum = 0;
-	for(int i = 0; i < numEdge; i++)
-	{
-		int v1 = edges[i * 2];//Row
-		int v2 = edges[i * 2 + 1];//Col
-
-		val[i] = 1;//Weight
-		col[i] = v2;
-
-		if(lastRow != v1)
-		{
-			//Make sure to skip unconnected vertices
-			int diff = v1 - lastRow;
-			for(int j = 0; j < diff - 1; j++)
-				row[rowNum++] = i;
-			row[rowNum++] = i;
-			lastRow = v1;
-		}
-	}
-
-	//Fill in final row columns
-	for(int i = rowNum; i <= numVert; i++)
-		row[i] = numEdge;
-}
-
-__device__ int findNext(int* __restrict__ edges, int numEdge, int numVert, int v, int* destination)
-{
-	int* val = edges;
-	int* col = &val[numEdge];
-	int* row = &col[numEdge];
-
-	int idx = row[v];
-	int nextIdx = row[v + 1];
-
 	int count = 0;
-	for(int i = idx; i < nextIdx; i++)
+
+	for(int i = 0; i < numEdge * 2; i+=2)
 	{
-		destination[count++] = col[i];
+		if(edges[i] == v)
+			destination[count++] = edges[i + 1];
 	}
 
 	return count;
 }
 
-__device__ void pushQueue(int element, int* queue, int queueSize, unsigned int* head, unsigned int* tail)
+__device__ void pushQueue(int element, int* queue, int queueSize, int* head, int* tail)
 {
-	int idx = atomicInc(tail, queueSize - 1);
-	queue[idx] = element;
+	queue[*tail] = element;
+	*tail = (*tail + 1) % queueSize;
 }
 
-__device__ int popQueue(int* queue, int queueSize, unsigned int* head, unsigned int* tail, int localIdx)
+__device__ int popQueue(int* queue, int queueSize, int* head, int* tail)
 {
-	int retn;
-	int diff = *tail > *head ? *tail - *head : *tail + queueSize - *head;
-	if(*head == *tail || diff <= localIdx) retn = -1;
-	else
-	{
-		//int idx = atomicInc(head, queueSize);
-		//retn = queue[idx];
-		retn = queue[*head + localIdx];
-	}
+	int retn = queue[*head];
+	*head = (*head + 1) % queueSize;
 	
 	return retn;
 }
 
 __device__ void pushStack(int element, int* stack, int* head)
 {
-	int idx = atomicAdd(head, 1);
-	stack[idx] = element;
+	stack[*head] = element;
+	*head = *head + 1;
 }
 
 __device__ int popStack(int* stack, int* head)
 {
-	int retn;
-	if(*head == 0) retn = -1;
-	else
-	{
-		int idx = atomicSub(head, 1);
-		retn = stack[idx - 1];
-	}
+	*head = *head - 1;
+	int retn = stack[*head];
 	
 	return retn;
 }
@@ -118,7 +64,7 @@ __device__ int PATH_SIZE;
 __device__ int D_SIZE;
 __device__ int Q_SIZE;
 
-__device__ void doAlg(int block_idx, int localIdx, int numVert, int* __restrict__ edges, int numEdges, linkNode* pList, float* BC, int* glob, float* globDep)
+__device__ void doAlg(int numVert, int* edges, int numEdges, linkNode* pList, float* BC, int* glob, float* globDep)
 {
 	S_SIZE = numVert;
 	P_SIZE = numEdges + numVert;
@@ -127,129 +73,86 @@ __device__ void doAlg(int block_idx, int localIdx, int numVert, int* __restrict_
 	PATH_SIZE = numVert;
 	ELEMENTS = numVert;
 
-	unsigned int PTR_OFFSET = (block_idx % MAX_VERTS_PAR) * (S_SIZE + D_SIZE + Q_SIZE + PATH_SIZE);
+	int x = blockDim.x * blockIdx.x + threadIdx.x;	
+	int y = blockDim.y * blockIdx.y + threadIdx.y;	
+	int idx = x + y * blockDim.x * gridDim.x;
 
-	const int blockSize = blockDim.x * blockDim.y;
+	unsigned int PTR_OFFSET = idx * (S_SIZE + D_SIZE + Q_SIZE + PATH_SIZE);
 	
 	int* S = &glob[PTR_OFFSET];
-	int* S_head = &shmem[4];
-	*S_head = 0;
+	int S_head = 0;
 	PTR_OFFSET += S_SIZE;
-
-	linkNode* P = &pList[(block_idx % MAX_VERTS_PAR) * P_SIZE];
+	
+	linkNode* P = &pList[idx * P_SIZE];
 	//Blank the previous items
-	for(int i = 0; localIdx + i * blockSize < P_SIZE; i++)
+	for(int i = 0; i < P_SIZE; i++)
 	{
-		P[localIdx + i * blockSize].edge = -1;
-		P[localIdx + i * blockSize].next = -1;
+		P[i].edge = -1;
+		P[i].next = NULL;
 	}
 
 	int* pathCount = &glob[PTR_OFFSET];
-	for(int i = 0; localIdx + i * blockSize < PATH_SIZE; i++)
+	for(int i = 0; i < PATH_SIZE; i++)
 	{
-		pathCount[localIdx + i * blockSize] = 0;
+		pathCount[i] = 0;
 	}
-	pathCount[block_idx] = 1;
+	pathCount[idx] = 1;
 	PTR_OFFSET += PATH_SIZE;
 
 	int* d = &glob[PTR_OFFSET];
-	for(int i = 0; localIdx + i * blockSize < D_SIZE; i++)
+	for(int i = 0; i < D_SIZE; i++)
 	{
-		d[localIdx + i * blockSize] = -1;
+		d[i] = -1;
 	}
-	d[block_idx] = 0;
+	d[idx] = 0;
 	PTR_OFFSET += D_SIZE;
 	
 	int* Q = &glob[PTR_OFFSET];
-	unsigned int* Q_head = (unsigned int*)&shmem[2];
-	unsigned int* Q_tail = (unsigned int*)&shmem[3];
-	if(localIdx == 0)
-	{
-		*Q_head = 0;
-		*Q_tail = 0;
-	}
+	int Q_head = 0;
+	int Q_tail = 0;
 	PTR_OFFSET += Q_SIZE;
 	
-	if(localIdx == 0)
-		pushQueue(block_idx, Q, Q_SIZE, Q_head, Q_tail);
+	pushQueue(idx, Q, Q_SIZE, &Q_head, &Q_tail);
 
-	int* volatile front = &shmem[0];
-	int* volatile nextFront = &shmem[1];
-	if(localIdx == 0)
+	while(Q_head != Q_tail)
 	{
-		*front = 1;
-		*nextFront = 0;
-	}
-
-	int* nextEmpty = &shmem[5];
-	int* volatile levelCount = &shmem[14];
-	int* levelArray = &shmem[15];
-	if(localIdx == 0)
-	{
-		*nextEmpty = numVert;
-		*levelCount = 1;
-		levelArray[0] = 0;
-	}
-
-
-	__syncthreads();
-
-	while(1)
-	{
-		__threadfence();
-		if(!(*Q_head != *Q_tail || *front > 0 || *nextFront != 0))break;
-		if(*front <= 0 && localIdx == 0)
-		{
-			*front = *nextFront;
-			*nextFront = 0;
-			levelArray[(*levelCount)++] = *S_head;
-		}
-		__threadfence();
-		int v = -1;
-		if(*front > localIdx)
-			v = popQueue(Q, Q_SIZE, Q_head, Q_tail, localIdx);
-		if(v < 0) continue;
-
-		//The first thread in a warp?
-		if((localIdx & (WARP_SIZE - 1)) == 0)
-		{
-			atomicAdd(Q_head, ((*front < WARP_SIZE) ? *front : WARP_SIZE));
-			if(*Q_head >= (unsigned int)Q_SIZE) atomicSub(Q_head, (unsigned int)Q_SIZE);
-			atomicSub(front, *front < WARP_SIZE ? *front : WARP_SIZE);
-		}
-		__threadfence();
-
-		pushStack(v, S, S_head);
+		int v = popQueue(Q, Q_SIZE, &Q_head, &Q_tail);
+		pushStack(v, S, &S_head);
 
 		int w[1024];
-		int edgeCount = findNext(edges, numEdges, numVert, v, w);
+		int edgeCount = findNext(edges, numEdges, v, w);
 
 		for(int i = 0; i < edgeCount; i++)
 		{
 			int wNode = w[i];
-			if(d[wNode] < 0 && atomicCAS(&d[wNode], -1, d[v] + 1) == -1)
+			if(d[wNode] < 0)
 			{
-				pushQueue(wNode, Q, Q_SIZE, Q_head, Q_tail);
-				atomicAdd(nextFront, 1);//Frontier expands
+				pushQueue(wNode, Q, Q_SIZE, &Q_head, &Q_tail);
+				d[wNode] = d[v] + 1;
 			}
-
+			
 			if(d[wNode] == d[v] + 1)
 			{
-				atomicAdd(&pathCount[wNode], pathCount[v]);
+				pathCount[wNode] = pathCount[wNode] + pathCount[v];
 				
 				//Append v to the PrevNode list
+
 				//Find the next empty slot. Start after the initial lookup indices
-				if(atomicCAS(&P[wNode].edge, -1, v) < 0);
+				if(P[wNode].edge < 0) P[wNode].edge = v;
 				else
 				{
-					int empty = atomicAdd(nextEmpty, 1);
-					P[empty].edge = v;
+					linkNode* empty;
+					for(empty = &P[numVert]; empty->edge >= 0; empty++);
 
 					linkNode* j = &P[wNode];
-					while(j->next != -1 || atomicCAS(&(j->next), -1, empty) >= 0)
+					linkNode* last = NULL;
+					while(j !=  NULL)
 					{
-						j = &P[j->next];
+						last = j;
+						j = j->next;
 					}
+					last->next = empty;
+					empty->edge = v;
 				}
 				
 				
@@ -258,35 +161,24 @@ __device__ void doAlg(int block_idx, int localIdx, int numVert, int* __restrict_
 
 	}
 	
-	float* dep = &globDep[(block_idx % MAX_VERTS_PAR) * numVert];
-	for(int i = 0; localIdx + i * blockSize < numVert; i++) dep[localIdx + i * blockSize] = 0;
-
-	if(localIdx == 0) (*levelCount)--;
-	__syncthreads();
+	float* dep = &globDep[idx * ELEMENTS];
 	
-	while(*S_head > 0)
+	while(S_head > 0)
 	{
-		int diff = *S_head - levelArray[*levelCount];
-		if(diff <= 0 && localIdx == 0)
-			(*levelCount)--;
-
-		if(localIdx >= diff) continue;
-		int w = popStack(S, S_head);
-		if(w == block_idx) continue;
+		int w = popStack(S, &S_head);
 		
 		//Loop through each v in P[w]
 		linkNode* node = &P[w];
-		while(node != NULL)
+		do
 		{
 			int v = node->edge;
+			node = node->next;
 			if(v < 0) continue;
 
-			atomicAdd(&dep[v], ((float)pathCount[v]/(float)pathCount[w]) * (1 + dep[w]));
-
-			node = node->next < 0 ? NULL : &P[node->next];
-		}
+			dep[v] = dep[v] + ((float)pathCount[v]/(float)pathCount[w]) * (1 + dep[w]);
+		}while(node != NULL);
 		
-		if(w != block_idx)
+		if(w != idx)
 		{
 			atomicAdd(&BC[w], dep[w]);
 		}
@@ -294,36 +186,24 @@ __device__ void doAlg(int block_idx, int localIdx, int numVert, int* __restrict_
 	
 }
 
-__global__ void betweennessCentrality(int numVert, int numEdges, int* __restrict__ edges, linkNode* pList, float* BC, int* glob, float* dep)
+__global__ void betweennessCentrality(int numVert, int numEdges, int *edges, linkNode* pList, float* BC, int* glob, float* dep)
 {
+	//extern __shared__ int path[];
+	
 	//sortEdges(edges, path);
-	int block_idx = gridDim.x * blockIdx.y + blockIdx.x;
-	int localIdx = threadIdx.x + threadIdx.y * blockDim.x;
+	int x = blockDim.x * blockIdx.x + threadIdx.x;	
+	int y = blockDim.y * blockIdx.y + threadIdx.y;	
+	int idx = x + y * blockDim.x * gridDim.x;
+
+	if(idx >= numVert) return;
+
+	BC[idx] = 0.0f;
 
 	__syncthreads();
-	int runs = ceilf((float)numVert / MAX_VERTS_PAR);
-	for(int i = 0; i < runs; i++)
-	{
-		if(block_idx + (MAX_VERTS_PAR * i) >= numVert) return;
-		doAlg(block_idx + (MAX_VERTS_PAR * i), localIdx, numVert, edges, numEdges, pList, BC, glob, dep);
-		__syncthreads();
-	}
+
+	doAlg(numVert, edges, numEdges, pList, BC, glob, dep);
 
 		
-}
-
-int edgeCompare(const void* a, const void* b)
-{
-	int* av1 = (int*)a;
-	int* av2 = av1 + 1;
-	int* bv1 = (int*)b;
-	int* bv2 = bv1 + 1;
-
-	if(*av1 < *bv1) return -1;
-	else if(*av1 > *bv1) return 1;
-	else if(*av2 < *bv2) return -1;
-	else if(*av2 > *bv2) return 1;
-	else return 0;
 }
 
 int main(int argc, char* argv[])
@@ -334,7 +214,6 @@ int main(int argc, char* argv[])
 	int *d_mem;
 	int *h_edge;
 	int *d_edge;
-	int *d_optEdge;
 	linkNode* pList;
 	float *d_bc;
 	float *h_bc;
@@ -406,59 +285,47 @@ int main(int argc, char* argv[])
 			}
 		}
 	}
-
-	//Sort the arrays for CSR
-	qsort(h_edge, numEdge, sizeof(int) * 2, edgeCompare);
-	
-	long totalMem = 0;
-	cudaMalloc((void**)&d_optEdge, sizeof(int) * ((numVert + 1) + (numEdge * 2)));
-	totalMem += sizeof(int) * ((numVert + 1) + (numEdge * 2));
-
-
 	struct timeval totalStart, totalEnd;
 	gettimeofday(&totalStart, NULL);
 
-	//First convert edges
-	cudaMalloc((void**)&d_edge, sizeof(int) * numEdge * 2);
-	//totalMem += sizeof(int) * numEdge * 2;
-	cudaMemcpy(d_edge, h_edge, sizeof(int) * numEdge * 2, cudaMemcpyHostToDevice);
-	convertEdges<<<1,1>>>(d_edge, numEdge, numVert, d_optEdge);
-	cudaDeviceSynchronize();
-	cudaFree(d_edge);
-
+	long totalMem = 0;
 	h_bc = (float*)malloc(sizeof(float) * numVert);
 	cudaMalloc((void**)&d_mem, sizeof(int) * numVert);
 	totalMem += sizeof(int) * numVert;
 	
+	cudaMalloc((void**)&d_edge, sizeof(int) * numEdge * 2);
+	totalMem += sizeof(int) * numEdge * 2;
+
 	cudaMalloc((void**)&d_bc, sizeof(float) * numVert);
-	cudaMemset(d_bc, 0, sizeof(float) * numVert);
 	totalMem += sizeof(float) * numVert;
 
-	cudaMalloc((void**)&d_glob, sizeof(int) * min(numVert, MAX_VERTS_PAR) * (numVert * 5));
-	totalMem += sizeof(int) * min(numVert, MAX_VERTS_PAR) * ((numVert * 5));
+	cudaMalloc((void**)&d_glob, sizeof(int) * numVert * (numVert * 5));
+	totalMem += sizeof(int) * numVert * ((numVert * 5));
 
-	cudaMalloc((void**)&pList, sizeof(linkNode) * min(numVert, MAX_VERTS_PAR) * (numVert + numEdge));
-	totalMem += sizeof(linkNode) * min(numVert, MAX_VERTS_PAR) * (numVert + numEdge);
+	cudaMalloc((void**)&pList, sizeof(linkNode) * numEdge * (numVert + numVert));
+	totalMem += sizeof(linkNode) * numEdge * (numVert + numVert);
 
-	cudaMalloc((void**)&d_dep, sizeof(float) * min(numVert, MAX_VERTS_PAR) * numVert);
-	totalMem += sizeof(float) * min(numVert,MAX_VERTS_PAR) * numVert;
+	cudaMalloc((void**)&d_dep, sizeof(float) * numVert * numVert);
+	totalMem += sizeof(float) * numVert * numVert;
+
+	cudaMemcpy(d_edge, h_edge, sizeof(int) * numEdge * 2, cudaMemcpyHostToDevice);
 	
 	dim3 block(BLOCK_WIDTH, BLOCK_HEIGHT);
-	int gridSize = min(numVert, MAX_VERTS_PAR);//ceil(numVert / (float)(BLOCK_WIDTH * BLOCK_HEIGHT));
+	int gridSize = ceil(numVert / (float)(BLOCK_WIDTH * BLOCK_HEIGHT));
 	dim3 grid(gridSize);
 
 	struct timeval start, end;
 
 	gettimeofday(&start, NULL);
-	betweennessCentrality<<<grid,block, 10000>>>(numVert, numEdge, d_optEdge, pList, d_bc, d_glob, d_dep);
+	betweennessCentrality<<<grid,block>>>(numVert, numEdge, d_edge, pList, d_bc, d_glob, d_dep);
 	cudaDeviceSynchronize();
 	gettimeofday(&end, NULL);
 	long elapsed = (end.tv_sec * 1000000 + end.tv_usec) - (start.tv_sec * 1000000 + start.tv_usec);
 
 	cudaError_t error = cudaGetLastError();
 	
-	//nt* h_mem = (int*)malloc(sizeof(int) * numVert);
-	//cudaMemcpy(h_mem, d_mem, sizeof(int) * numVert, cudaMemcpyDeviceToHost);
+	int* h_mem = (int*)malloc(sizeof(int) * numVert);
+	cudaMemcpy(h_mem, d_mem, sizeof(int) * numVert, cudaMemcpyDeviceToHost);
 	cudaMemcpy(h_bc, d_bc, sizeof(float) * numVert, cudaMemcpyDeviceToHost);
 
 	gettimeofday(&totalEnd, NULL);
