@@ -294,10 +294,10 @@ __device__ void doAlg(int block_idx, int localIdx, int numVert, int* __restrict_
 	
 }
 
-__global__ void betweennessCentrality(int numVert, int numEdges, int* __restrict__ edges, linkNode* pList, float* BC, int* glob, float* dep)
+__global__ void betweennessCentrality(int numVert, int numEdges, int* __restrict__ edges, linkNode* pList, float* BC, int* glob, float* dep, int mode)
 {
 	//sortEdges(edges, path);
-	int block_idx = gridDim.x * blockIdx.y + blockIdx.x;
+	int block_idx = gridDim.x * blockIdx.y + blockIdx.x + (mode ? numVert / 2 : 0);
 	int localIdx = threadIdx.x + threadIdx.y * blockDim.x;
 
 	__syncthreads();
@@ -305,6 +305,8 @@ __global__ void betweennessCentrality(int numVert, int numEdges, int* __restrict
 	for(int i = 0; i < runs; i++)
 	{
 		if(block_idx + (MAX_VERTS_PAR * i) >= numVert) return;
+		else if(block_idx + (MAX_VERTS_PAR * i) < numVert / 2 && mode == 1) continue;
+		else if(block_idx + (MAX_VERTS_PAR * i) >= numVert / 2 && mode == 0) continue;
 		doAlg(block_idx + (MAX_VERTS_PAR * i), localIdx, numVert, edges, numEdges, pList, BC, glob, dep);
 		__syncthreads();
 	}
@@ -331,15 +333,14 @@ int main(int argc, char* argv[])
 	int elements = DEFAULT_ELE;
 
 	//cudaProfilerStart();
-	int *d_mem;
 	int *h_edge;
 	int *d_edge;
-	int *d_optEdge;
-	linkNode* pList;
-	float *d_bc;
-	float *h_bc;
-	int *d_glob;
-	float *d_dep;
+	int *d_optEdge, *d_optEdge2;
+	linkNode* pList, *pList2;
+	float *d_bc, *d_bc2;
+	float *h_bc, *h_bc2;
+	int *d_glob, *d_glob2;
+	float *d_dep, *d_dep2;
 
 	int numVert = elements;
 	int numEdge = elements - 1;
@@ -425,11 +426,13 @@ int main(int argc, char* argv[])
 	convertEdges<<<1,1>>>(d_edge, numEdge, numVert, d_optEdge);
 	cudaDeviceSynchronize();
 	cudaFree(d_edge);
+	cudaSetDevice(1);
+	cudaMalloc((void**)&d_optEdge2, sizeof(int) * ((numVert + 1) + (numEdge * 2)));
+	cudaMemcpy(d_optEdge2, d_optEdge, sizeof(int) * ((numVert + 1) + (numEdge * 2)), cudaMemcpyDeviceToDevice);
+	cudaSetDevice(0);
 
 	h_bc = (float*)malloc(sizeof(float) * numVert);
-	cudaMalloc((void**)&d_mem, sizeof(int) * numVert);
-	totalMem += sizeof(int) * numVert;
-	
+	h_bc2 = (float*)malloc(sizeof(float) * numVert);
 	cudaMalloc((void**)&d_bc, sizeof(float) * numVert);
 	cudaMemset(d_bc, 0, sizeof(float) * numVert);
 	totalMem += sizeof(float) * numVert;
@@ -450,7 +453,18 @@ int main(int argc, char* argv[])
 	struct timeval start, end;
 
 	gettimeofday(&start, NULL);
-	betweennessCentrality<<<grid,block, 10000>>>(numVert, numEdge, d_optEdge, pList, d_bc, d_glob, d_dep);
+	betweennessCentrality<<<grid,block, 10000>>>(numVert, numEdge, d_optEdge, pList, d_bc, d_glob, d_dep, 0);
+
+	cudaSetDevice(1);
+	cudaMalloc((void**)&d_bc2, sizeof(float) * numVert);
+	cudaMemset(d_bc2, 0, sizeof(float) * numVert);
+	cudaMalloc((void**)&d_glob2, sizeof(int) * min(numVert, MAX_VERTS_PAR) * (numVert * 5));
+	cudaMalloc((void**)&pList2, sizeof(linkNode) * min(numVert, MAX_VERTS_PAR) * (numVert + numEdge));
+	cudaMalloc((void**)&d_dep2, sizeof(float) * min(numVert, MAX_VERTS_PAR) * numVert);
+	betweennessCentrality<<<grid,block, 10000>>>(numVert, numEdge, d_optEdge2, pList2, d_bc2, d_glob2, d_dep2, 1);
+
+	cudaDeviceSynchronize();
+	cudaSetDevice(0);
 	cudaDeviceSynchronize();
 	gettimeofday(&end, NULL);
 	long elapsed = (end.tv_sec * 1000000 + end.tv_usec) - (start.tv_sec * 1000000 + start.tv_usec);
@@ -460,6 +474,8 @@ int main(int argc, char* argv[])
 	//nt* h_mem = (int*)malloc(sizeof(int) * numVert);
 	//cudaMemcpy(h_mem, d_mem, sizeof(int) * numVert, cudaMemcpyDeviceToHost);
 	cudaMemcpy(h_bc, d_bc, sizeof(float) * numVert, cudaMemcpyDeviceToHost);
+	cudaSetDevice(1);
+	cudaMemcpy(h_bc2, d_bc2, sizeof(float) * numVert, cudaMemcpyDeviceToHost);
 
 	gettimeofday(&totalEnd, NULL);
 	long totalElapsed = (totalEnd.tv_sec * 1000000 + totalEnd.tv_usec) - 
@@ -467,7 +483,7 @@ int main(int argc, char* argv[])
 
 	for(int i = 0; i < numVert; i++)
 	{
-		cout << h_bc[i] << endl;
+		cout << h_bc[i] + h_bc2[i] << endl;
 	}
 	//cout<<elements<<endl;
 	
