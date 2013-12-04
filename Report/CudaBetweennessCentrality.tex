@@ -1,0 +1,37 @@
+\documentclass[12pt,twocolumn]{article}
+\usepackage{array}
+\usepackage[numbers,square,sort]{natbib}
+
+\begin{document}
+
+\title{Extending SNAP with CUDA}
+\author{Gavin Gresham}
+\maketitle
+
+\section{Abstract}
+The goal of this project is to create a CUDA [NVIDIA] implementation of an algorithm to compute vertex betweenness centrality of social networking graphs. The benchmark being used is SNAP [cite], a collection of social networking algorithms, including a CPU implementation of betweenness centrality. 
+ 
+I use a modified version of the algorithm found in [Brandes] to introduce parallelism at both the vertex level, as well as the neighbour detection level. This allows for a balance between both performance and memory usage. In this paper I will demonstrate the value of CUDA in the analysis of social network graphs, as well as discuss the current limitations of the technology.
+ 
+\section{Implementation}
+I attempted three implementations of the betweenness centrality algorithm. First I will discuss the naive implementation which introduces parallelism to Brandes algorithm at the vertex level. It is straight forward to implement, but it has drawbacks, as I'll discuss. Next is the approach that adds parallelism to edge detection. This version is more complex and requires more attention to synchronization and memory conflicts. Finally there is a version that attempts to utilize additional GPUs with MPI. This version requires very few CUDA changes, but requires that memory be replicated across each GPU.
+ 
+[Figure: Brandes Psuedo]
+ 
+\subsection{Vertex Level Parallelsim}
+With very little modification, we can add parallelization to Brandes algorithm. The outer loop, that iterates through each vertex in the graph, operates independently of previous and future iterations. This CUDA implementation assigns a thread to each vertex in the graph.
+ 
+There are several benefits to this approach. It is straight foward and easy to understand. You could implement the same code on CPU architectures without complications.
+ 
+However, drawbacks exist as well. Brandes algorithm conserves space when executed sequentially, but when run in parallel any array that is mutable has to be copied to every parallel thread. The only memory that is shared is the cummulative betweenness centrality score and the array of edges. This leads to an exponential growth in memory as the number of vertices rises. The overall memory usage ends up being $MEMORY FORMULA$, which quickly becomes impractical above graphs with vertices numbering for than 4000.
+ 
+\subsection{Edge Discovery parallelism}
+This implementation is intended to utilizes CUDA's high amount of low powered threads while optimizing for its memory restrictions. The basis of the algorithm is still based on [Brandes], but has several modifications to ease thread synchronization and memory access penalties.
+ 
+The algorithm is aware of the properties of a CUDA warp. In the current hardware generation, 32 threads operate simultaneously on instructions and are able to combine adjecent memory reads and writes to a single operation. Given the latency for accessing global memory, this is a crucial feature to exploit. When a warp reaches the section of code that requests the next set of vertices from the frontier queue, 32 vertex indices are popped from the queue for a more efficient transaction. Under ideal circumstances it will be done in 4 memory reads, though if the queue elements are not 32 byte aligned it could be 5 reads. The same method is used after all the shortest paths are found to retrieve batches of vertex indices from the stack.
+ 
+Unfortunately, the same opportunities for memory optimizations do not exist in other sections of the code. The nature of social networking graphs means that a vertex could be connected to any other vertex in the graph, which makes sequential reads during the edge discovery phase improbable. Additionally, the fact that each vertex will have a variably edge degree means that CUDA warps will diverge. Under normal operations every thread in a warp executes an instruction simultaneously. When one or more threads diverge instructions must now be run sequentially until the threads once again converge.
+ 
+An area that will have less reliable memory optimization is writing to the predecessor list. These are stored in linked list structure where the first $numVert$ array slots correspond to the first predecessor found for the vertex with index $n$ and array slots $numVert$ through $numEdge$ are empty space for any linked list to expand into. A pointer in shared memory exists to the next empty slot in the array and is initialized to $numVert$, the first element of the expansions section. When a thread needs to add a new node to a vertex's linked list the pointer must be updated atomically. In an idea situation, all warp threads will need to expand a linked list and the $atomicAdd$ function will return sequential indices. This would result in a very efficient global write. However, it is possible that another warp will be requesting a pointer for free space at the same moment, and the indices could be distributed among the competing warps. While some memory could still be coalesced and stored using reduced instruction, optimal throughput will not be achieved. There seems to be no way to allow a warp exclusive access to an atomic variable without causing a significant delay to running time.
+
+\end{document}
