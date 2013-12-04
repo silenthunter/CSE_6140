@@ -2,6 +2,9 @@
 #include <stdio.h>
 #include <iostream>
 #include <sys/time.h>
+extern "C"{
+#include "bc_cuda.h"
+}
 
 using namespace std;
 
@@ -328,7 +331,7 @@ int edgeCompare(const void* a, const void* b)
 	else return 0;
 }
 
-int main(int argc, char* argv[])
+/*int main(int argc, char* argv[])
 {
 	int elements = DEFAULT_ELE;
 
@@ -406,10 +409,20 @@ int main(int argc, char* argv[])
 				edgeCnt += 4;
 			}
 		}
-	}
+	}*/
+
+extern "C" void betweennessCentralityCU(int numVert, int numEdge, int *edges, float* bc, int numSegment, int seg)
+{
+	int *d_edge;
+	int *d_optEdge, *d_optEdge2;
+	linkNode* pList, *pList2;
+	float *d_bc, *d_bc2;
+	float *h_bc, *h_bc2;
+	int *d_glob, *d_glob2;
+	float *d_dep, *d_dep2;
 
 	//Sort the arrays for CSR
-	qsort(h_edge, numEdge, sizeof(int) * 2, edgeCompare);
+	qsort(edges, numEdge, sizeof(int) * 2, edgeCompare);
 	
 	long totalMem = 0;
 	cudaMalloc((void**)&d_optEdge, sizeof(int) * ((numVert + 1) + (numEdge * 2)));
@@ -422,7 +435,7 @@ int main(int argc, char* argv[])
 	//First convert edges
 	cudaMalloc((void**)&d_edge, sizeof(int) * numEdge * 2);
 	//totalMem += sizeof(int) * numEdge * 2;
-	cudaMemcpy(d_edge, h_edge, sizeof(int) * numEdge * 2, cudaMemcpyHostToDevice);
+	cudaMemcpy(d_edge, edges, sizeof(int) * numEdge * 2, cudaMemcpyHostToDevice);
 	convertEdges<<<1,1>>>(d_edge, numEdge, numVert, d_optEdge);
 	cudaDeviceSynchronize();
 	cudaFree(d_edge);
@@ -483,17 +496,18 @@ int main(int argc, char* argv[])
 
 	for(int i = 0; i < numVert; i++)
 	{
-		cout << h_bc[i] + h_bc2[i] << endl;
+		//cout << h_bc[i] + h_bc2[i] << endl;
+		bc[i] = h_bc[i] + h_bc2[i];
 	}
 	//cout<<elements<<endl;
 	
 	//cudaProfilerStop();
 	
 	cudaDeviceReset();
-	cout << cudaGetErrorString(error) << endl;
+	/*cout << cudaGetErrorString(error) << endl;
 	cout << "Mem Used: " << totalMem << endl;
 	cout << "Time(usec): " << elapsed << endl;
-	cout << "Total Time(usec): " << totalElapsed << endl;
+	cout << "Total Time(usec): " << totalElapsed << endl;*/
 	
-	return 0;
+	return;
 }
