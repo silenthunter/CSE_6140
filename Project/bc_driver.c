@@ -64,16 +64,30 @@ int main(int argc, char* argv[])
 	int seg = 0;
 	float *bc, *bc_recv;
 
+
+	struct timeval totalStart, totalEnd;
+	gettimeofday(&totalStart, NULL);
+
 	bc = (float*)malloc(sizeof(float) * numVert);
 	bc_recv = (float*)malloc(sizeof(float) * numVert);
 	betweennessCentralityCU(numVert, numEdge, h_edge, bc, numprocs, rank);
 	MPI_Reduce(bc, bc_recv, numVert, MPI_FLOAT, MPI_SUM, 0, MPI_COMM_WORLD);
 
+	gettimeofday(&totalEnd, NULL);
+	long totalElapsed = (totalEnd.tv_sec * 1000000 + totalEnd.tv_usec) - 
+		( totalStart.tv_sec * 1000000 + totalStart.tv_usec); 
+
+	if(rank == 0)
+	{
+		int i;
+		for(i = 0; i < numVert; i++)
+		{
+			printf("%f\n", bc_recv[i]);
+		}
+		printf("Time(usec): %d\n",totalElapsed);
+	}
 	MPI_Finalize();
 
-	int i;
-	for(i = 0; i < numVert; i++)
-	{
-		printf("%f\n", bc_recv[i]);
-	}
+
+	return;
 }

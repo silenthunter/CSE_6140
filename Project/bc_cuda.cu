@@ -297,19 +297,24 @@ __device__ void doAlg(int block_idx, int localIdx, int numVert, int* __restrict_
 	
 }
 
-__global__ void betweennessCentrality(int numVert, int numEdges, int* __restrict__ edges, linkNode* pList, float* BC, int* glob, float* dep, int mode)
+__global__ void betweennessCentrality(int numVert, int numEdges, int* __restrict__ edges, linkNode* pList, float* BC, int* glob, float* dep, int numSegment, int seg)
 {
 	//sortEdges(edges, path);
-	int block_idx = gridDim.x * blockIdx.y + blockIdx.x + (mode ? numVert / 2 : 0);
+	int segSize = numVert / numSegment;
+	int segStart = seg * segSize;
+	int segStop = seg * segSize + segSize;
+	int block_idx = gridDim.x * blockIdx.y + blockIdx.x;
 	int localIdx = threadIdx.x + threadIdx.y * blockDim.x;
 
 	__syncthreads();
 	int runs = ceilf((float)numVert / MAX_VERTS_PAR);
 	for(int i = 0; i < runs; i++)
 	{
-		if(block_idx + (MAX_VERTS_PAR * i) >= numVert) return;
-		else if(block_idx + (MAX_VERTS_PAR * i) < numVert / 2 && mode == 1) continue;
-		else if(block_idx + (MAX_VERTS_PAR * i) >= numVert / 2 && mode == 0) continue;
+		int vertID = block_idx + (MAX_VERTS_PAR * i);
+		if(vertID >= numVert) return;
+		if(vertID < segStart) continue;
+		else if(vertID >= segStop) continue;
+		
 		doAlg(block_idx + (MAX_VERTS_PAR * i), localIdx, numVert, edges, numEdges, pList, BC, glob, dep);
 		__syncthreads();
 	}
@@ -330,86 +335,6 @@ int edgeCompare(const void* a, const void* b)
 	else if(*av2 > *bv2) return 1;
 	else return 0;
 }
-
-/*int main(int argc, char* argv[])
-{
-	int elements = DEFAULT_ELE;
-
-	//cudaProfilerStart();
-	int *h_edge;
-	int *d_edge;
-	int *d_optEdge, *d_optEdge2;
-	linkNode* pList, *pList2;
-	float *d_bc, *d_bc2;
-	float *h_bc, *h_bc2;
-	int *d_glob, *d_glob2;
-	float *d_dep, *d_dep2;
-
-	int numVert = elements;
-	int numEdge = elements - 1;
-
-	if(argc < 2)
-	{
-
-		FILE *grFile;
-		grFile = fopen("test.gr", "w");
-		fprintf(grFile, "p %d %d d u 0\n", numVert, numEdge);
-		h_edge = (int*)malloc(sizeof(int) * numEdge * 2);
-		
-		//Init edges
-		for(int i = 0; i < numEdge; i++)
-		{
-			h_edge[i * 2] = i % numVert;
-			h_edge[i * 2 + 1] = (i + 1) % numVert;
-			fprintf(grFile, "%d %d\n", h_edge[i * 2], h_edge[i * 2 + 1]);
-		}
-		fclose(grFile);
-	}
-	else
-	{
-		FILE *grFile;
-		char buff[1024];
-		int edgeCnt = 0;
-		grFile = fopen(argv[1], "r");
-		while(!feof(grFile))
-		{
-			fgets(buff, 1024, grFile);
-			if(feof(grFile))break;
-
-			//This is the  "problem" line
-			if(buff[0] == 'p')
-			{
-				char* token = strtok(buff, " ");
-
-				token = strtok(NULL, " ");
-				token = strtok(NULL, " ");
-				numVert = atoi(token);
-				
-				token = strtok(NULL, " ");
-				numEdge = atoi(token) * 2;
-
-				h_edge = (int*)malloc(sizeof(int) * numEdge * 2);
-
-			}
-			else if(buff[0] == '#' || buff[0] == 'c')
-				continue;
-			else if(buff[0] == 'a')
-			{
-				char* token = strtok(buff, " ");
-
-				//Skip 'a'
-				token = strtok(NULL, " ");
-				int e1 = atoi(token) - 1;
-				h_edge[edgeCnt] = e1;
-				h_edge[edgeCnt + 3] = e1;
-				token = strtok(NULL, " ");
-				int e2 = atoi(token) - 1;
-				h_edge[edgeCnt + 1] = e2;
-				h_edge[edgeCnt + 2] = e2;
-				edgeCnt += 4;
-			}
-		}
-	}*/
 
 extern "C" void betweennessCentralityCU(int numVert, int numEdge, int *edges, float* bc, int numSegment, int seg)
 {
@@ -466,7 +391,7 @@ extern "C" void betweennessCentralityCU(int numVert, int numEdge, int *edges, fl
 	struct timeval start, end;
 
 	gettimeofday(&start, NULL);
-	betweennessCentrality<<<grid,block, 10000>>>(numVert, numEdge, d_optEdge, pList, d_bc, d_glob, d_dep, 0);
+	betweennessCentrality<<<grid,block, 10000>>>(numVert, numEdge, d_optEdge, pList, d_bc, d_glob, d_dep, numSegment * 2, seg * 2);
 
 	cudaSetDevice(1);
 	cudaMalloc((void**)&d_bc2, sizeof(float) * numVert);
@@ -474,7 +399,8 @@ extern "C" void betweennessCentralityCU(int numVert, int numEdge, int *edges, fl
 	cudaMalloc((void**)&d_glob2, sizeof(int) * min(numVert, MAX_VERTS_PAR) * (numVert * 5));
 	cudaMalloc((void**)&pList2, sizeof(linkNode) * min(numVert, MAX_VERTS_PAR) * (numVert + numEdge));
 	cudaMalloc((void**)&d_dep2, sizeof(float) * min(numVert, MAX_VERTS_PAR) * numVert);
-	betweennessCentrality<<<grid,block, 10000>>>(numVert, numEdge, d_optEdge2, pList2, d_bc2, d_glob2, d_dep2, 1);
+	betweennessCentrality<<<grid,block, 10000>>>(numVert, numEdge, d_optEdge2, pList2, d_bc2, d_glob2,
+		 d_dep2, numSegment * 2, seg * 2 + 1);
 
 	cudaDeviceSynchronize();
 	cudaSetDevice(0);
@@ -504,8 +430,8 @@ extern "C" void betweennessCentralityCU(int numVert, int numEdge, int *edges, fl
 	//cudaProfilerStop();
 	
 	cudaDeviceReset();
-	/*cout << cudaGetErrorString(error) << endl;
-	cout << "Mem Used: " << totalMem << endl;
+	cout << cudaGetErrorString(error) << endl;
+	/*cout << "Mem Used: " << totalMem << endl;
 	cout << "Time(usec): " << elapsed << endl;
 	cout << "Total Time(usec): " << totalElapsed << endl;*/
 	
