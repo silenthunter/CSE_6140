@@ -39,4 +39,13 @@ Expanding upon the work described in the previous section, support for platforms
 
 The actual addition of MPI is fairly simple. All that is needed is the number of processes and the rank fo the current MPI node. Each node calls CUDA with this information as parameters. From this information, the method knows how large each block of vertices is and which block it's responsible for. This block can be futher divided on the MPI node depending on how many GPUs are present. Once all CUDA processes are finished there is an $MPI_Reduce$ to sum the arrays of betweenness centrality computed on each node.
 
+\section{Results}
+
+\subsection{Vertex Level Parallelism}
+This simple parellization of Brandes algorithm has very poor performance compared to SNAP. It runs at about 5\% of the FLOPS that SNAP can operate at as seen in Table \ref[compareTable]. Additionally, it can't run on input files with more than 4096 vertices due to memory requirements.
+
+One of the key problems is CUDA thread occupancy. Without additional threads per vertex some resources on the GPU are left idle. CUDA operates best when you can achieve a high occupancy with warps operating on similar tasks. A naive implementation of Brandes algorith simply has too much divergence.
+
+Memory locality is also not considered in vertex level parallelism. Each vertex maintains its own data structures for the frontier, predecessor list, path count, and found vertex stack. These exist in one large array in global memory and threads in a warp will rarely, if ever, access sequential memory locations.
+
 \end{document}
