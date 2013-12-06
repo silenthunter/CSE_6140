@@ -1,10 +1,11 @@
 \documentclass[10pt,twocolumn]{article}
 \usepackage{array}
 \usepackage[numbers,square,sort]{natbib}
-\usepackage{multirow}
-\usepackage{graphicx}
+\usepackage{multirow,graphicx}
+%\usepackage[toc]{multitoc}
 \usepackage[boxed]{algorithm2e}
-\usepackage{breakurl}
+\usepackage{url}
+\usepackage{amssymb, amsmath}
 
 \begin{document}
 
@@ -15,11 +16,25 @@
 \section{Abstract}
 The goal of this project is to create a CUDA \cite{cudaGuide} implementation of an algorithm to compute vertex betweenness centrality of social networking graphs. The benchmark being used is SNAP \cite{snapGraph}, a collection of social networking algorithms, including a CPU implementation of betweenness centrality. 
  
-I use a modified version of the algorithm found in \cite{Brandes01afaster} to introduce parallelism at both the vertex level, as well as the neighbour detection level. This allows for a balance between both performance and memory usage. In this paper I will demonstrate the value of CUDA in the analysis of social network graphs, as well as discuss the current limitations of the technology.
+I use a modified version of the algorithm found in \cite{Brandes01afaster} to introduce parallelism at both the vertex level, as well as the neighbor detection level. This allows for a balance between both performance and memory usage. In this paper I will demonstrate the value of CUDA in the analysis of social network graphs, as well as discuss the current limitations of the technology.
 
 \section{Problem}
+In social networking graphs, betweenness centrality can be used to measure the relative importance of a vertex. Given a graph $G = (V, E)$  and where $v,s,t \in V$ it can be described as:
 
-\begin{algorithm}[HA]
+\begin{equation*}
+bc(v) = \sum_{s \neq v \neq t}{\frac{\sigma_{st}(v)}{\sigma_{st}}}\\
+\end{equation*}
+
+Both the research on social networks and the social networking graphs themselves are growing, and I believe betweenness centrality will continue to be an important metric in future work. This is why the use of CUDA to enhance the computation of the centrality of vertices is a useful tool as the size of graphs become too large for previous sequential tools to process in a reasonable amount of time.
+
+\section{Existing Work}
+The primary influence of this project is \cite{Brandes01afaster}. The psuedocode of Brandes' algorithm can be seen in Alg \ref{alg:Brande}. It demonstrates how to compute betweenness centrality of a given $v \in V$  requiring a time complexity of $O(nm)$ on unweighted graphs instead of the previously known $O (n^3)$.
+
+While not an influence to this project, \cite{distributedCentrality} discusses methods for computing centrality on systems that use distributed memory. In recent years NVIDIA has added Unified Virtual Addressing (UVA) to CUDA \cite{cudaUVA}. This allows GPUs to directly access one another's memory instead of going through host memory. Edmonds' approach could help solve the memory barrier that graphs currently experience on GPUs. While this approach is aimed at multiple GPUs on a single platform, CUDA clusters may become common in the future.
+
+The work most similar to this project would be \cite{evalCentrality}. While I chose to modify Brandes' algorithm, Sriram et al. developed a new approach. While it would be difficult to compare our results, their data shows a significantly higher speedup. In the future I would attempt to implement their algorithm on social networking graphs to see how it compares to the algorithm used in this project.
+
+\begin{algorithm}[h!]
 %\SetLine
 CB[v] $\leftarrow$, $v \in V$\;
 \For{$s \in V$}
@@ -55,46 +70,44 @@ CB[v] $\leftarrow$, $v \in V$\;
 	\While{S not empty}
 	{
 		pop w $\leftarrow$ S\;
-		\For{$v \in P[w]$}{$\delta[v] \leftarrow \delta[v] + \delta[v] / \delta[w] (1 + \delta[w])$\;}
+		\For{$v \in P[w]$}{$\delta[v] \leftarrow \delta[v] + \sigma[v] / \sigma[w] (1 + \delta[w])$\;}
 		\If{$w \neq s$}{$CB[w] \leftarrow CB[w] + \delta[w]$\;}
 	}
 }
 
-\caption{Brande's Algorithm}
-
+\caption{Brandes' Algorithm}
+\label{alg:Brande}
 \end{algorithm}
  
 \section{Implementation}
-I attempted three implementations of the betweenness centrality algorithm. First I will discuss the naive implementation which introduces parallelism to Brandes algorithm at the vertex level. It is straight forward to implement, but it has drawbacks, as I'll discuss. Next is the approach that adds parallelism to edge detection. This version is more complex and requires more attention to synchronization and memory conflicts. Finally there is a version that attempts to utilize additional GPUs with MPI. This version requires very few CUDA changes, but requires that memory be replicated across each GPU.
+I attempted three implementations of the betweenness centrality algorithm. First, I will discuss the naive implementation which introduces parallelism to Brandes' algorithm at the vertex level. It is straight forward to implement, but it has drawbacks, as I'll discuss. Next is the approach that adds parallelism to edge detection. This version is more complex and requires more attention to synchronization and memory conflicts. Finally there is a version that attempts to utilize additional GPUs with MPI. This version requires very few CUDA changes, but requires that memory be replicated across each GPU.
  
-[Figure: Brandes Psuedo]
- 
-\subsection{Vertex Level Parallelsim}
+\subsection{Vertex Level Parallelism}
 \label{vertexPar}
-With very little modification, we can add parallelization to Brandes algorithm. The outer loop, that iterates through each vertex in the graph, operates independently of previous and future iterations. This CUDA implementation assigns a thread to each vertex in the graph.
+With very little modification, we can add parallelization to Brandes' algorithm. The outer loop, that iterates through each vertex in the graph, operates independently of previous and future iterations. This CUDA implementation assigns a thread to each vertex in the graph.
  
-There are several benefits to this approach. It is straight foward and easy to understand. You could implement the same code on CPU architectures without complications.
+There are several benefits to this approach. It is straight forward and easy to understand. You could implement the same code on CPU architectures without complications.
  
-However, drawbacks exist as well. Brandes algorithm conserves space when executed sequentially, but when run in parallel any array that is mutable has to be copied to every parallel thread. The only memory that is shared is the cummulative betweenness centrality score and the array of edges. This leads to an exponential growth in memory as the number of vertices rises. The overall memory usage ends up being $|V| * (5|V| + |E|)$, which quickly becomes impractical above graphs with vertices numbering for than 4000.
+However, drawbacks exist as well. Brandes' algorithm conserves space when executed sequentially, but when run in parallel any array that is mutable has to be copied to every parallel thread. The only memory that is shared is the cumulative betweenness centrality score and the array of edges. This leads to an exponential growth in memory as the number of vertices rises. The overall memory usage ends up being $|V| * (5|V| + |E|)$, which quickly becomes impractical above graphs with vertices numbering more than 4096.
  
 \subsection{Edge Discovery Parallelism}
 \subsubsection{Algorithm}
 \label{implBFS}
 This implementation is intended to utilizes CUDA's high amount of low powered threads while optimizing for its memory restrictions. The basis of the algorithm is still based on \cite{Brandes01afaster}, but has several modifications to ease thread synchronization and memory access penalties.
  
-The algorithm is aware of the properties of a CUDA warp. In the current hardware generation, 32 threads operate simultaneously on instructions and are able to combine adjecent memory reads and writes to a single operation. Given the latency for accessing global memory, this is a crucial feature to exploit. When a warp reaches the section of code that requests the next set of vertices from the frontier queue, 32 vertex indices are popped from the queue for a more efficient transaction. Under ideal circumstances it will be done in 4 memory reads, though if the queue elements are not 32 byte aligned it could be 5 reads. The same method is used after all the shortest paths are found to retrieve batches of vertex indices from the stack.
+The algorithm is aware of the properties of a CUDA warp. In the current hardware generation, 32 threads operate simultaneously on instructions and are able to combine adjacent memory reads and writes to a single operation. Given the latency for accessing global memory, this is a crucial feature to exploit. When a warp reaches the section of code that requests the next set of vertices from the frontier queue, 32 vertex indices are popped from the queue for a more efficient transaction. Under ideal circumstances it will be done in 4 memory reads, though if the queue elements are not 32 byte aligned it could be 5 reads. The same method is used after all the shortest paths are found to retrieve batches of vertex indices from the stack.
  
 Unfortunately, the same opportunities for memory optimizations do not exist in other sections of the code. The nature of social networking graphs means that a vertex could be connected to any other vertex in the graph, which makes sequential reads during the edge discovery phase improbable. Additionally, the fact that each vertex will have a variably edge degree means that CUDA warps will diverge. Under normal operations every thread in a warp executes an instruction simultaneously. When one or more threads diverge instructions must now be run sequentially until the threads once again converge.
  
 An area that will have less reliable memory optimization is writing to the predecessor list. These are stored in linked list structure where the first $|V|$ array slots correspond to the first predecessor found for the vertex with index $ \in V$ and array slots $|V|$ through $|E|$ are empty space for any linked list to expand into. A pointer in shared memory exists to the next empty slot in the array and is initialized to $|V|$, the first element of the expansions section. When a thread needs to add a new node to a vertex's linked list the pointer must be updated atomically. In an idea situation, all warp threads will need to expand a linked list and the $atomicAdd()$ function will return sequential indices. This would result in a very efficient global write. However, it is possible that another warp will be requesting a pointer for free space at the same moment, and the indices could be distributed among the competing warps. While some memory could still be coalesced and stored using reduced instruction, optimal throughput will not be achieved. There seems to be no way to allow a warp exclusive access to an atomic variable without causing a significant delay to running time.
 
 \subsubsection{Data Structures}
-Originally I had implemented a coordinate list to store edges. The memory requirement was $|E| * 2$ and even when sorted the edge array has to be scanned to find the correct entry. To improve performance I switched to a compressed sparse row (CSR) format as suggested in \cite{Sariyuce}. The memory requirement for CSR is $|V| + |E|$ if you exlucde the edge weights, and a list of edges can be discovered in constant time for any vertex. As long as $|V| < |E|$ this approach is more space efficient as the graph grows.
+Originally I had implemented a coordinate list to store edges. The memory requirement was $|E| * 2$ and even when sorted the edge array has to be scanned to find the correct entry. To improve performance I switched to a compressed sparse row (CSR) format as suggested in \cite{Sariyuce}. The memory requirement for CSR is $|V| + |E|$ if you exclude the edge weights, and a list of edges can be discovered in constant time for any vertex. As long as $|V| < |E|$ this approach is more space efficient as the graph grows.
 
 \subsection{MPI Enhanced}
-Expanding upon the work described in the previous section, support for platforms with multiple GPUs and high performance computing clusters was added. The CUDA code was modified to compute designated segments of vertices allowing the work to be distributed amongst a variable number of network nodes. It is important to note that the memory requirement for each GPU is still the same as the implementation discuseed in Section \ref{implBFS}. This means that an MPI solution will not be able to compute betweenness centrality on any arbitrarily large graph, but lowering the number of vertices a GPU computes in parallel in direct correlation to the number of added GPUs could allow for large graphs to be computed without reducing overall throughput.
+Expanding upon the work described in the previous section, support for platforms with multiple GPUs and high performance computing clusters was added. The CUDA code was modified to compute designated segments of vertices allowing the work to be distributed amongst a variable number of network nodes. It is important to note that the memory requirement for each GPU is still the same as the implementation discussed in Section \ref{implBFS}. This means that an MPI solution will not be able to compute betweenness centrality on any arbitrarily large graph, but lowering the number of vertices a GPU computes in parallel in direct correlation to the number of added GPUs could allow for large graphs to be computed without reducing overall throughput.
 
-The actual addition of MPI is fairly simple. All that is needed is the number of processes and the rank fo the current MPI node. Each node calls CUDA with this information as parameters. From this information, the method knows how large each block of vertices is and which block it's responsible for. This block can be futher divided on the MPI node depending on how many GPUs are present. Once all CUDA processes are finished there is an $MPI\_Reduce$ to sum the arrays of betweenness centrality computed on each node.
+The actual addition of MPI is fairly simple. All that is needed is the number of processes and the rank of the current MPI node. Each node calls CUDA with this information as parameters. From this information, the method knows how large each block of vertices is and which block it's responsible for. This block can be further divided on the MPI node depending on how many GPUs are present. Once all CUDA processes are finished there is an $MPI\_Reduce$ to sum the arrays of betweenness centrality computed on each node.
 
 All multi-GPU test runs were performed on Jinx using 2 nodes for a total of 4 GPUs.
 
@@ -128,14 +141,14 @@ All multi-GPU test runs were performed on Jinx using 2 nodes for a total of 4 GP
 \end{table*}
 
 \subsection{Vertex Level Parallelism}
-This simple parellization of Brandes algorithm has very poor performance compared to SNAP. It runs at about 5\% of the FLOPS that SNAP can operate at as seen in Table \ref{tbl:compare}. Additionally, it can't run on input files with more than 4096 vertices due to memory requirements.
+This simple parellization of Brandes' algorithm has very poor performance compared to SNAP. It runs at about 5\% of the FLOPS that SNAP can operate at as seen in Table \ref{tbl:compare}. Additionally, it can't run on input files with more than 4096 vertices due to memory requirements.
 
-One of the key problems is CUDA thread occupancy. Without additional threads per vertex some resources on the GPU are left idle. CUDA operates best when you can achieve a high occupancy with warps operating on similar tasks. A naive implementation of Brandes algorith simply has too much divergence.
+One of the key problems is CUDA thread occupancy. Without additional threads per vertex some resources on the GPU are left idle. CUDA operates best when you can achieve a high occupancy with warps operating on similar tasks. A naive implementation of Brandes' algorithm simply has too much divergence.
 
 Memory locality is also not considered in vertex level parallelism. Each vertex maintains its own data structures for the frontier, predecessor list, path count, and found vertex stack. These exist in one large array in global memory and threads in a warp will rarely, if ever, access sequential memory locations.
 
 \subsection{Edge Discovery Parallelism}
-Being optimized for CUDA, this implementation beformed significantly better than vertex level parallelism. As seen in Table \ref{tbl:compare} as the graph size increases the speedup in relation to SNAP plateaus at around 1.5x. These results are due to tuning parameters to work with the m2050/m2070 devices that are used on the Jinx cluster \cite{jinx}. Running this algorith on another device would likely require adjusting the number of threads per vertex, as well as the maximum number of vertices that are being processed at any one time.
+Being optimized for CUDA, this implementation performed significantly better than vertex level parallelism. As seen in Table \ref{tbl:compare} as the graph size increases the speedup in relation to SNAP plateaus at around 1.5x. These results are due to tuning parameters to work with the m2050/m2070 devices that are used on the Jinx cluster \cite{jinx}. Running this algorithm on another device would likely require adjusting the number of threads per vertex, as well as the maximum number of vertices that are being processed at any one time.
 
 \begin{figure}[htbp]
 \centering
@@ -151,7 +164,7 @@ Combined with the changes from section \ref{implBFS} the MPI implementation show
 \subsection{Conclusion}
 CUDA shows how important algorithm design is on an architecture that does not have the same optimizations that modern CPUs have. The memory management principles of the I/O model must be observed, and some type of cache aware algorithm design goes a long way to increasing performance.
 
-The vertex level parellization from section \ref{vertexPar} is an example of how an algorithm that is efficient in a traditional sequential CPU environment cannot be simply transferred to a Single Instruction Multiple Data (SIMD) environment in the hopes of gaining a speedup simply by adding more processing elements. The algorithm must be tuned for the architecture it will run on. Once designed for scalability it can be possible for speedup to increase near linearly as seen in section \ref.
+The vertex level parallelization from section \ref{vertexPar} is an example of how an algorithm that is efficient in a traditional sequential CPU environment cannot be simply transferred to a Single Instruction Multiple Data (SIMD) environment in the hopes of gaining a speedup simply by adding more processing elements. The algorithm must be tuned for the architecture it will run on. Once designed for scalability it can be possible for speedup to increase near linearly as seen in section \ref{mpiResults}.
 
 \section{Future Work}
 Currently the usage of shared memory is limited to tracking the graph frontier and the state of the stack and queue. This leaves much of the shared memory unused despite the fact that it has a significantly lower access time than global memory. Any array that could be stored in shared memory quickly outgrows the 48KB available to CUDA 2.0 devices and I have thought of no other use for it.
