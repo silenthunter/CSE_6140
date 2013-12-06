@@ -194,10 +194,14 @@ __device__ void doAlg(int block_idx, int localIdx, int numVert, int* __restrict_
 
 	__syncthreads();
 
+	//Done with initialization, starting main loop
 	while(1)
 	{
 		__threadfence();
+		//Termination conditions can't be in the while(). Memory must be consistent before checked
 		if(!(*Q_head != *Q_tail || *front > 0 || *nextFront != 0))break;
+		
+		//See if we're done with this frontier
 		if(*front <= 0 && localIdx == 0)
 		{
 			*front = *nextFront;
@@ -211,6 +215,7 @@ __device__ void doAlg(int block_idx, int localIdx, int numVert, int* __restrict_
 		if(v < 0) continue;
 
 		//The first thread in a warp?
+		//Then let the other threads know how much work this warp is doing
 		if((localIdx & (WARP_SIZE - 1)) == 0)
 		{
 			atomicAdd(Q_head, ((*front < WARP_SIZE) ? *front : WARP_SIZE));
@@ -227,12 +232,14 @@ __device__ void doAlg(int block_idx, int localIdx, int numVert, int* __restrict_
 		for(int i = 0; i < edgeCount; i++)
 		{
 			int wNode = w[i];
+			//first seen?
 			if(d[wNode] < 0 && atomicCAS(&d[wNode], -1, d[v] + 1) == -1)
 			{
 				pushQueue(wNode, Q, Q_SIZE, Q_head, Q_tail);
 				atomicAdd(nextFront, 1);//Frontier expands
 			}
 
+			//shortest path?
 			if(d[wNode] == d[v] + 1)
 			{
 				atomicAdd(&pathCount[wNode], pathCount[v]);
