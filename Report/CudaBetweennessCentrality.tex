@@ -51,12 +51,13 @@ CB[v] $\leftarrow$, $v \in V$\;
 		push v $\rightarrow$ S\;
 		\For{neighbor w of v}
 		{
-			%\STATE
+			//w found for the first time? \newline
 			\If{$d[w] < 0$}{
 			
 				enqueue w $\rightarrow$ Q\;
 				$d[w] \leftarrow d[v] + 1$\;}
 			
+			//shortest path to w via v? \newline
 			\If{$d[w] = d[v] + 1$}{
 			
 				$\sigma[w] \leftarrow \sigma[w] + \sigma[v]$\;
@@ -66,11 +67,11 @@ CB[v] $\leftarrow$, $v \in V$\;
 	}
 
 
-	$\sigma[v] \leftarrow 0$, $v \in V$\;
+	$\delta[v] \leftarrow 0$, $v \in V$\;
 	\While{S not empty}
 	{
 		pop w $\leftarrow$ S\;
-		\For{$v \in P[w]$}{$\delta[v] \leftarrow \delta[v] + \sigma[v] / \sigma[w] (1 + \delta[w])$\;}
+		\For{$v \in P[w]$}{$\delta[v] \leftarrow \delta[v] + \sigma[v] / \sigma[w]* (1 + \delta[w])$\;}
 		\If{$w \neq s$}{$CB[w] \leftarrow CB[w] + \delta[w]$\;}
 	}
 }
@@ -155,7 +156,7 @@ While a speedup was achieved they were below my original expectations. The amoun
 \begin{figure}[htbp]
 \centering
 \includegraphics[scale=.6]{runningTime.png}
-\caption{The running time of SNAP and the Edge Discovery implementation as a function of graph size.}
+\caption{The running time of SNAP and the Edge Discovery implementation as a function of graph size. MPI was run with 4 GPUs.}
 \label{fig:runningTime}
 \end{figure}
 
